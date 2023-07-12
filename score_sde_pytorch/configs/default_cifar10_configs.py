@@ -66,6 +66,8 @@ def get_default_configs():
   optim.warmup = 5000
   optim.grad_clip = 1.
 
+  #MLMC
+  config.mlmc.acc=[.5,.1,.05,.01,.005,.001]
   config.seed = 42
   config.device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 
