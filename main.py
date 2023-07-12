@@ -22,7 +22,7 @@ from ml_collections.config_flags import config_flags
 import logging
 import os
 import tensorflow as tf
-
+import MLMC
 FLAGS = flags.FLAGS
 
 config_flags.DEFINE_config_file(
@@ -51,7 +51,7 @@ def main(argv):
     run_lib.train(FLAGS.config, FLAGS.workdir)
   elif FLAGS.mode == "eval":
     # Run the evaluation pipeline
-    run_lib.evaluate(FLAGS.config, FLAGS.workdir, FLAGS.eval_folder)
+    MLMC.mlmc_test(FLAGS.config.mlmc.acc)
   else:
     raise ValueError(f"Mode {FLAGS.mode} not recognized.")
 
