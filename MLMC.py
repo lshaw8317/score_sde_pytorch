@@ -16,6 +16,12 @@ import logging
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from matplotlib.legend import Legend
+plt.rc('text', usetex=True)
+plt.rc('font',**{'serif':['cm']})
+plt.style.use('seaborn-paper')
+plt.rcParams['figure.dpi'] = 300
+plt.rcParams['savefig.dpi'] = 300
+
 # Keep the import below for registering all model definitions
 import torch
 from torch.utils import tensorboard
