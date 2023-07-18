@@ -329,9 +329,9 @@ def mlmc_test(acc):
             sums[l],sqsums[l] = looper(Nsamples,l,M)
         
         means_p=imagenorm(sums[:,1]/Nsamples)
-        V_p=(sqsums[:,1]/Nsamples)-means_p**2 
+        V_p=(sqsums[:,1].squeeze()/Nsamples)-means_p**2 
         means_dp=imagenorm(sums[:,0]/Nsamples)
-        V_dp=(sqsums[:,0]/Nsamples)-means_dp**2  
+        V_dp=(sqsums[:,0].squeeze()/Nsamples)-means_dp**2  
         
         #Plot variances
         axis_list[0].plot(range(Lmax+1),np.log(V_p)/np.log(M),'k:',label='$P_{l}$',
@@ -380,7 +380,7 @@ def mlmc_test(acc):
         #Add estimated beta
         # s='$\\beta$ = {}'.format(round(beta,2))
         # t = axis_list[0].annotate(s, (Lmax/2, np.log(V_dp[2])/np.log(M)),fontsize=markersize,
-        #         size=2*markersize, bbox=dict(ec='None',facecolor='None',lw=2))
+        #         bbox=dict(ec='None',facecolor='None',lw=2))
         
         #Label means plot
         axis_list[1].set_xlabel('$l$')
@@ -390,7 +390,7 @@ def mlmc_test(acc):
         #Add estimated alpha
         # s='$\\alpha$ = {}'.format(round(alpha,2))
         # t = axis_list[1].annotate(s, (Lmax/2, np.log(means_dp[1])/np.log(M)), fontsize=markersize,
-        #         size=2*markersize, bbox=dict(ec='None',facecolor='None',lw=2))
+        #         bbox=dict(ec='None',facecolor='None',lw=2))
         
         #Label number of levels plot
         axis_list[2].set_xlabel('$l$')
