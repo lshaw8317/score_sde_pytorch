@@ -16,26 +16,27 @@ import logging
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from matplotlib.legend import Legend
-
 # Keep the import below for registering all model definitions
-from models import ddpm, ncsnv2, ncsnpp
-import datasets
-import evaluation
-import likelihood
-import sde_lib
 import torch
 from torch.utils import tensorboard
 from torchvision.utils import make_grid, save_image
 from utils import save_checkpoint, restore_checkpoint
-from configs.vp import cifar10_ddpmpp_continuous as config
-
+from configs.vp import cifar10_ddpmpp_continuous as configs
+import datasets
+import evaluation
+import likelihood
+import sde_lib
+from models import ddpm,ncsnv2,ncsnpp
+alpha_0=0;beta_0=0
 def imagenorm(img):
     s=img.shape
-    n=torch.linalg.vector_norm(img,dim=(-3,-2,-1)) #flattens and calculates norm
+    n=torch.linalg.norm(torch.flatten(img, start_dim=-3, end_dim=-1),dim=-1) #flattens non-batch dims and calculates norm
     n/=np.prod(s[-3:])
     return n
 
 def mlmc_test(acc):
+    torch.cuda.empty_cache()
+    config=configs.get_config()
     # Create data normalizer and its inverse
     denoise=True
     alpha_0=0;beta_0=0 #orders of convergence of sde solvers
@@ -48,7 +49,7 @@ def mlmc_test(acc):
     
     ckpt=8
     workdir='exp'
-    checkpoint_dir = os.path.join(workdir, "checkpoints")
+    checkpoint_dir = os.path.join(workdir, "checkpoints","cifar10_ddpmpp_continuous")
     ckpt_dir = os.path.join(checkpoint_dir, f'checkpoint_{ckpt}.pth')
     eval_dir = os.path.join(workdir, 'eval')
     tf.io.gfile.makedirs(eval_dir)
@@ -85,34 +86,34 @@ def mlmc_test(acc):
         Returns:
             Xf,Xc (numpy.array) : final samples for N_loop sample paths (Xc=X0 if l==0)
         """
-        xf = sde.prior_sampling((bs,sampling_shape[1:])).to(config.device)
-        xc = xf.clone().detach().to(config.device)
-        Nf=M**l
-        #Nc=M**(l-1) implicitly
-        fine_timesteps = torch.linspace(sde.T, sampling_eps,Nf, device=xf.device)
-        dWc=torch.zeros_like(xf).to(config.device)
-        dtc=0
-        tc=sde.T
-        for i in range(Nf-1):
-          tf = fine_timesteps[i]
-          dt=fine_timesteps[i+1]-tf
-          dtc+=dt #running sum of coarse timestep
-          vec_t = torch.ones(sampling_shape[0], device=tf.device) * tf
-          
-          dWf = torch.randn_like(xf)*np.sqrt(-dt)
-          dWc+=dWf
-          xf,xf_mean=EulerMaruyama(xf,vec_t,dt,dWf)
-          if i%M==0: #if i is integer multiple of M...
-              vec_t = torch.ones(sampling_shape[0], device=tc.device) * tc
-              xc,xc_mean=EulerMaruyama(xc,vec_t,dtc,dWc) #...Develop coarse path
-              dWc=torch.zeros_like(xc) #...Re-initialise coarse BI to 0
-              tc=tf #coarse solution now advanced to current fine time
-              dtc=0
-        if denoise:
-            return inverse_scaler(xf_mean),inverse_scaler(xc_mean)
-        else:
-            return inverse_scaler(xf),inverse_scaler(xc)
-    
+        with torch.no_grad():
+            xf = sde.prior_sampling((bs,*sampling_shape[-3:])).to(config.device)
+            xc = xf.clone().detach().to(config.device)
+            Nf=M**l
+            #Nc=M**(l-1) implicitly
+            fine_timesteps = torch.linspace(sde.T, sampling_eps,Nf, device=xf.device)
+            dWc=torch.zeros_like(xf).to(xc.device)
+            dtc=0
+            tc=torch.tensor([sde.T]).to(xc.device)
+            for i in range(Nf-1):
+                tf = fine_timesteps[i]
+                dt=fine_timesteps[i+1]-tf
+                dtc+=dt #running sum of coarse timestep
+                vec_t = torch.ones(bs, device=tf.device) * tf
+                dWf = torch.randn_like(xf)*torch.sqrt(-dt)
+                dWc+=dWf
+                xf,xf_mean=EulerMaruyama(xf,vec_t,dt,dWf)
+                if i%M==0: #if i is integer multiple of M...
+                    vec_t = torch.ones(bs, device=tc.device) * tc
+                    xc,xc_mean=EulerMaruyama(xc,vec_t,dtc,dWc) #...Develop coarse path
+                    dWc=torch.zeros_like(xc) #...Re-initialise coarse BI to 0
+                    tc=tf.clone().detach() #coarse solution now advanced to current fine time
+                    dtc=0
+            if denoise:
+                return inverse_scaler(xf_mean),inverse_scaler(xc_mean)
+            else:
+                return inverse_scaler(xf),inverse_scaler(xc)
+        
     def looper(Nl,l,M):
         """ 
         Interfaces with mlmc function to implement loop over Nl samples and generate payoff sums.
@@ -127,27 +128,28 @@ def mlmc_test(acc):
             Returns [sumPf,sumPf2,sumPf,sumPf2,0,0,0] is l=0.
          """
         sqsums=torch.zeros((4,1))
-        sums=torch.zeros((3,sampling_shape[-3:]))
+        sums=torch.zeros((3,*sampling_shape[-3:]))
         num_sampling_rounds = Nl // config.eval.batch_size + 1
         numrem=Nl % config.eval.batch_size
         for r in range(num_sampling_rounds):
             bs=numrem if r==num_sampling_rounds-1 else config.eval.batch_size
     
             Xf,Xc=mlmc_sample(bs,l,M) #should automatically use cuda
-                
+            Xf,Xc=Xf.to('cpu'),Xc.to('cpu')
             sumXf=torch.sum(Xf,axis=0) #sum over batch size
-            sumXf2=torch.sum(imagenorm(Xf)**2,axis=0)
+            sumXf2=torch.sum(imagenorm(Xf)**2,axis=0).item()
             if l==0:
-                sums[:4,...]+=torch.stack([sumXf,sumXf2,sumXf,sumXf2])
+                sqsums+=torch.tensor([sumXf2,sumXf2,0,0]).reshape(sqsums.shape)
+                sums+=torch.stack([sumXf,sumXf,torch.zeros_like(sumXf)])
             else:
                 dX_l=Xf-Xc #Image difference
                 sumdX_l=torch.sum(dX_l,axis=0) #sum over batch size
-                sumdX_l2=torch.sum(imagenorm(dX_l)**2,axis=0)
+                sumdX_l2=torch.sum(imagenorm(dX_l)**2,axis=0).item()
                 sumXc=torch.sum(Xc,axis=0)
-                sumXc2=torch.sum(imagenorm(Xc)**2,axis=0)
+                sumXc2=torch.sum(imagenorm(Xc)**2,axis=0).item()
                 sumXcXf=torch.sum(Xc*Xf)
                 sums+=torch.stack([sumdX_l,sumXf,sumXc])
-                sqsums+=torch.stack([sumdX_l2,sumXf2,sumXc2,sumXcXf])
+                sqsums+=torch.tensor([sumdX_l2,sumXf2,sumXc2,sumXcXf]).reshape(sqsums.shape)
         logging.info("sampling -- ckpt: %d, round: %d" % (ckpt, r))
     
         # Directory to save samples. Repeatedly overwrites, just to save some example samples for debugging
@@ -193,9 +195,9 @@ def mlmc_test(acc):
         V=torch.zeros(L+1) #Initialise variance vector of each levels' variance
         N=torch.zeros(L+1) #Initialise num. samples vector of each levels' num. samples
         dN=N0*torch.ones(L+1) #Initialise additional samples for this iteration vector for each level
-        sqsums=torch.zeros((L+1,4)) #Initialise sqsums array of normed [dX^2,Xf^2,Xc^2,XcXf], each column is a level
-        sqrt_h=torch.sqrt(M**(torch.arange(0,L+1)))
-        sums=torch.zeros((L+1,3,sampling_shape[-3:])) #Initialise sums array of unnormed [dX,Xf,Xc], each column is a level
+        sqsums=torch.zeros((L+1,4,1)) #Initialise sqsums array of normed [dX^2,Xf^2,Xc^2,XcXf], each column is a level
+        sqrt_h=torch.sqrt(M**(torch.arange(0,L+1,dtype=torch.float32)))
+        sums=torch.zeros((L+1,3,*sampling_shape[-3:])) #Initialise sums array of unnormed [dX,Xf,Xc], each column is a level
     
         while (torch.sum(dN)>0): #Loop until no additional samples asked for
             for l in range(L+1):
@@ -206,8 +208,8 @@ def mlmc_test(acc):
                     sums[l,...]+=tempsums
                     
             N+=dN #Increment samples taken counter for each level
-            Yl=imagenorm(sums[:,0]/N)
-            V=torch.maximum((sqsums[:,0]/N)-(Yl)**2,0) #Calculate variance based on updated samples
+            Yl=imagenorm(sums[:,0])/N
+            V=torch.clip((sqsums[:,0].squeeze())/N-(Yl)**2,min=0) #Calculate variance based on updated samples
             
             ##Fix to deal with zero variance or mean by linear extrapolation
             # Yl[3:]=np.maximum(Yl[3:],Yl[2:L]*M**(-alpha))
@@ -218,20 +220,20 @@ def mlmc_test(acc):
                 #=>log(Yl)=log(k(M^alpha-1)T^alpha)-alpha*l*log(M)
                 X=torch.ones((L,2))
                 X[:,0]=torch.arange(1,L+1)
-                a = torch.linalg.lstsq(X,torch.log(Yl[1:]),rcond=None)[0]
-                alpha = max(0.5,-a[0]/torch.log(M))
+                a = torch.lstsq(torch.log(Yl[1:]),X)[0]
+                alpha = max(-a[0]/np.log(M),.5)
             if beta_0==0: #Estimate order of variance convergence using LR
                 X=torch.ones((L,2))
                 X[:,0]=torch.arange(1,L+1)
-                b = torch.linalg.lstsq(X,torch.log(V[1:]),rcond=None)[0]
-                beta = max(0.5,-b[0]/torch.log(M))
+                b = torch.lstsq(torch.log(V[1:]),X)[0]
+                beta= max(-b[0]/np.log(M),.5)
     
             sqrt_V=torch.sqrt(V)
             Nl_new=torch.ceil((2*acc**-2)*torch.sum(sqrt_V*sqrt_h)*(sqrt_V/sqrt_h)) #Estimate optimal number of samples/level
-            dN=torch.maximum(0,Nl_new-N) #Number of additional samples
+            dN=torch.clip(Nl_new-N,min=0) #Number of additional samples
         
-            if sum(dN > 0.01*N) == 0: #Almost converged
-                if max(Yl[-2]/(M**alpha),Yl[-1])>(M**alpha-1)*acc*torch.sqrt(0.5):
+            if torch.sum(dN > 0.01*N).item() == 0: #Almost converged
+                if max(Yl[-2]/(M**alpha),Yl[-1])>(M**alpha-1)*acc*np.sqrt(0.5):
                     L+=1
                     #Add extra entries for the new level and estimate sums with N0 samples 
                     V=torch.concatenate((V,torch.zeros(1)), axis=0)
@@ -265,6 +267,7 @@ def mlmc_test(acc):
             Nsamples(int) = 10**5 : number of samples to use to estimate variance/mean
         """
         #Set plotting params
+        print('Successfully called GilesPlot')
         fig,_=plt.subplots(2,2)
         label='Testing MLMC Diffusion Models'
         markersize=(fig.get_size_inches()[0])
@@ -283,7 +286,7 @@ def mlmc_test(acc):
             e=acc[i]
             sums,sqsums,N=mlmc(e,M,warm_start=False,N0=N0) #sums=[dX,Xf,Xc], sqsums=[||dX||^2,||Xf||^2,||Xc||^2]
             L=len(N)-1
-            means_p=imagenorm(sums[1,:]/N) #Norm of mean of fine discretisations
+            means_p=imagenorm(sums[1,:])/N #Norm of mean of fine discretisations
             V_p=(sqsums[1,:]/N)-means_p**2
             
             cost_mlmc+=[torch.sum(N*(M**np.arange(0,L+1)))*e**2]
@@ -299,7 +302,7 @@ def mlmc_test(acc):
             # Write samples to disk or Google Cloud Storage
             with tf.io.gfile.GFile(os.path.join(this_sample_dir, "averages.pt"), "wb") as fout:
                 io_buffer = io.BytesIO()
-                torch.save(sums/N,io_buffer)
+                torch.save(sums/N[...,None,None,None,None],io_buffer)
                 fout.write(io_buffer.getvalue())
             # Write samples to disk or Google Cloud Storage
             with tf.io.gfile.GFile(os.path.join(this_sample_dir, "sqaverages.pt"), "wb") as fout:
@@ -313,8 +316,8 @@ def mlmc_test(acc):
                 fout.write(io_buffer.getvalue())
             
         #Variance and mean samples
-        sums=torch.zeros((Lmax+1,sums.shape[1:]))
-        sqsums=torch.zeros((Lmax+1,sqsums.shape[1:]))
+        sums=torch.zeros((Lmax+1,*sums.shape[1:]))
+        sqsums=torch.zeros((Lmax+1,*sqsums.shape[1:]))
     
         for l in range(Lmax+1):
             sums[l],sqsums[l] = looper(Nsamples,l,M)
@@ -409,8 +412,8 @@ def mlmc_test(acc):
         fig.tight_layout(rect=[0, 0.03, 1, 0.94],h_pad=1,w_pad=1,pad=1)
         
         
-        with open(os.path.join(eval_dir,'GilesPlot.pdf'),'w') as f:
-            plt.savefig(f, format='pdf', bbox_inches='tight')
+        f=os.path.join(eval_dir,'GilesPlot.pdf')
+        fig.savefig(f, format='pdf', bbox_inches='tight')
         return None
     
     markers=[i for i in range(len(acc))]
