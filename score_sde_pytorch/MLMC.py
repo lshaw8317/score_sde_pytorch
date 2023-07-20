@@ -16,7 +16,7 @@ import logging
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 from matplotlib.legend import Legend
-plt.rc('text', usetex=True)
+plt.rc('text', usetex=False)
 plt.rc('font',**{'serif':['cm']})
 plt.style.use('seaborn-paper')
 plt.rcParams['figure.dpi'] = 300
@@ -97,13 +97,13 @@ def mlmc_test(acc):
             xc = xf.clone().detach().to(config.device)
             Nf=M**l
             #Nc=M**(l-1) implicitly
-            fine_timesteps = torch.linspace(sde.T, sampling_eps,Nf, device=xf.device)
+            fine_times = torch.linspace(sde.T, sampling_eps,Nf+1, device=xf.device)
             dWc=torch.zeros_like(xf).to(xc.device)
             dtc=0
             tc=torch.tensor([sde.T]).to(xc.device)
-            for i in range(Nf-1):
-                tf = fine_timesteps[i]
-                dt=fine_timesteps[i+1]-tf
+            for i in range(Nf):
+                tf = fine_times[i]
+                dt=fine_times[i+1]-tf
                 dtc+=dt #running sum of coarse timestep
                 vec_t = torch.ones(bs, device=tf.device) * tf
                 dWf = torch.randn_like(xf)*torch.sqrt(-dt)
@@ -141,19 +141,18 @@ def mlmc_test(acc):
             bs=numrem if r==num_sampling_rounds-1 else config.eval.batch_size
     
             Xf,Xc=mlmc_sample(bs,l,M) #should automatically use cuda
-            Xf,Xc=Xf.to('cpu'),Xc.to('cpu')
-            sumXf=torch.sum(Xf,axis=0) #sum over batch size
-            sumXf2=torch.sum(imagenorm(Xf)**2,axis=0).item()
+            sumXf=torch.sum(Xf,axis=0).to('cpu') #sum over batch size
+            sumXf2=torch.sum(imagenorm(Xf)**2,axis=0).to('cpu').item()
             if l==0:
                 sqsums+=torch.tensor([sumXf2,sumXf2,0,0]).reshape(sqsums.shape)
                 sums+=torch.stack([sumXf,sumXf,torch.zeros_like(sumXf)])
             else:
                 dX_l=Xf-Xc #Image difference
-                sumdX_l=torch.sum(dX_l,axis=0) #sum over batch size
-                sumdX_l2=torch.sum(imagenorm(dX_l)**2,axis=0).item()
-                sumXc=torch.sum(Xc,axis=0)
-                sumXc2=torch.sum(imagenorm(Xc)**2,axis=0).item()
-                sumXcXf=torch.sum(Xc*Xf)
+                sumdX_l=torch.sum(dX_l,axis=0).to('cpu') #sum over batch size
+                sumdX_l2=torch.sum(imagenorm(dX_l)**2,axis=0).to('cpu').item()
+                sumXc=torch.sum(Xc,axis=0).to('cpu')
+                sumXc2=torch.sum(imagenorm(Xc)**2,axis=0).to('cpu').item()
+                sumXcXf=torch.sum(Xc*Xf).to('cpu')
                 sums+=torch.stack([sumdX_l,sumXf,sumXc])
                 sqsums+=torch.tensor([sumdX_l2,sumXf2,sumXc2,sumXcXf]).reshape(sqsums.shape)
         logging.info("sampling -- ckpt: %d, round: %d" % (ckpt, r))
@@ -242,12 +241,12 @@ def mlmc_test(acc):
                 if max(Yl[-2]/(M**alpha),Yl[-1])>(M**alpha-1)*acc*np.sqrt(0.5):
                     L+=1
                     #Add extra entries for the new level and estimate sums with N0 samples 
-                    V=torch.concatenate((V,torch.zeros(1)), axis=0)
-                    N=torch.concatenate((N,N0*torch.zeros(1)),axis=0)
-                    dN=torch.concatenate((dN,N0*torch.ones(1)),axis=0)
-                    sqrt_h=torch.concatenate((sqrt_h,[torch.sqrt(M**L)]),axis=0)
-                    sums=torch.concatenate((sums,torch.zeros_like(sums[0])),axis=0)
-                    sqsums=torch.concatenate((sqsums,torch.zeros_like(sqsums[0])),axis=0)
+                    V=torch.cat((V,torch.zeros(1)), dim=0)
+                    N=torch.cat((N,N0*torch.zeros(1)),dim=0)
+                    dN=torch.cat((dN,N0*torch.ones(1)),dim=0)
+                    sqrt_h=torch.cat((sqrt_h,torch.tensor([M**(L/2)])),dim=0)
+                    sums=torch.cat((sums,torch.zeros((1,*sums[0].shape))),dim=0)
+                    sqsums=torch.cat((sqsums,torch.zeros((1,*sqsums[0].shape))),dim=0)
                     
         print(f'Estimated alpha = {alpha}')
         print(f'Estimated beta = {beta}')
@@ -292,8 +291,8 @@ def mlmc_test(acc):
             e=acc[i]
             sums,sqsums,N=mlmc(e,M,warm_start=False,N0=N0) #sums=[dX,Xf,Xc], sqsums=[||dX||^2,||Xf||^2,||Xc||^2]
             L=len(N)-1
-            means_p=imagenorm(sums[1,:])/N #Norm of mean of fine discretisations
-            V_p=(sqsums[1,:]/N)-means_p**2
+            means_p=imagenorm(sums[:,1])/N #Norm of mean of fine discretisations
+            V_p=(sqsums[:,1]/N)-means_p**2
             
             cost_mlmc+=[torch.sum(N*(M**np.arange(0,L+1)))*e**2]
             cost_mc+=[2*torch.sum(V_p*(M**np.arange(L+1)))]
@@ -416,12 +415,11 @@ def mlmc_test(acc):
         #Add title and space out subplots
         fig.suptitle(label+f'\n$M={M}$')
         fig.tight_layout(rect=[0, 0.03, 1, 0.94],h_pad=1,w_pad=1,pad=1)
-        
-        
+                
         f=os.path.join(eval_dir,'GilesPlot.pdf')
         fig.savefig(f, format='pdf', bbox_inches='tight')
         return None
-    
+    acc=[.01]
     markers=[i for i in range(len(acc))]
     Giles_plot(acc,markers)
     

@@ -16,4 +16,4 @@ torchaudio==0.7.0
 ninja
 tensorflow-probability==0.12.2
 matplotlib
-gcc7
+#conda create -c conda-forge -n scoresde_test python=3.8 cxx-compiler cudatoolkit=11.0 gxx_linux-64==11.1.0 cudnn=8.0
