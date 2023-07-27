@@ -27,22 +27,22 @@ import torch
 from torch.utils import tensorboard
 from torchvision.utils import make_grid, save_image
 from utils import save_checkpoint, restore_checkpoint
-from configs.vp import cifar10_ddpmpp_continuous as configs
 import datasets
 import evaluation
 import likelihood
 import sde_lib
 from models import ddpm,ncsnv2,ncsnpp
 alpha_0=0;beta_0=0
+
 def imagenorm(img):
     s=img.shape
     n=torch.linalg.norm(torch.flatten(img, start_dim=-3, end_dim=-1),dim=-1) #flattens non-batch dims and calculates norm
     n/=np.prod(s[-3:])
     return n
 
-def mlmc_test(acc):
+def mlmc_test(config,workdir,cpointdir):
+    acc=config.mlmc.acc
     torch.cuda.empty_cache()
-    config=configs.get_config()
     # Create data normalizer and its inverse
     denoise=True
     alpha_0=0;beta_0=0 #orders of convergence of sde solvers
@@ -52,26 +52,36 @@ def mlmc_test(acc):
     # Use inceptionV3 for images with resolution higher than 256.
     inceptionv3 = config.data.image_size >= 256
     inception_model = evaluation.get_inception_model(inceptionv3=inceptionv3)
-    
-    ckpt=8
-    workdir='exp'
-    checkpoint_dir = os.path.join(workdir, "checkpoints","cifar10_ddpmpp_continuous")
+
+    checkpoint_dir = os.path.join(workdir, "checkpoints",cpointdir)
+    dirs=os.listdir(checkpoint_dir)
+    ckpt = np.min(np.array([int(d.split('_')[-1][:-4]) for d in dirs]))
     ckpt_dir = os.path.join(checkpoint_dir, f'checkpoint_{ckpt}.pth')
-    eval_dir = os.path.join(workdir, 'eval')
+    eval_dir = os.path.join(workdir, 'eval',cpointdir)
     tf.io.gfile.makedirs(eval_dir)
     
-    sampling_eps = 1e-3
-    
     # Initialize model
-    model = mutils.create_model(config)
-    loaded_state = torch.load(ckpt_dir, map_location=config.device)
+    model = mutils.get_model(config.model.name)(config)
+    loaded_state = torch.load(ckpt_dir, map_location='cpu')
     model.load_state_dict(loaded_state['model'], strict=False)
-    
+    model.to(config.device)
+    model = torch.nn.DataParallel(model)
+
     sampling_shape = (config.eval.batch_size,
                       config.data.num_channels,
                       config.data.image_size, config.data.image_size)
-    
-    sde = sde_lib.VPSDE(beta_min=config.model.beta_min, beta_max=config.model.beta_max, N=config.model.num_scales)
+    if config.training.sde.lower() == 'vpsde':
+        sde = sde_lib.VPSDE(beta_min=config.model.beta_min, beta_max=config.model.beta_max, N=config.model.num_scales)
+        sampling_eps = 1e-3
+    elif config.training.sde.lower() == 'subvpsde':
+        sde = sde_lib.subVPSDE(beta_min=config.model.beta_min, beta_max=config.model.beta_max, N=config.model.num_scales)
+        sampling_eps = 1e-3
+    elif config.training.sde.lower() == 'vesde':
+        sde = sde_lib.VESDE(sigma_min=config.model.sigma_min, sigma_max=config.model.sigma_max, N=config.model.num_scales)
+        sampling_eps = 1e-5
+    else:
+        raise NotImplementedError(f"SDE {config.training.sde} unknown.")
+
     score_fn=mutils.get_score_fn(sde, model)
     rsde = sde.reverse(score_fn, probability_flow=False)
     
@@ -293,8 +303,9 @@ def mlmc_test(acc):
             L=len(N)-1
             means_p=imagenorm(sums[:,1])/N #Norm of mean of fine discretisations
             V_p=(sqsums[:,1]/N)-means_p**2
-            
-            cost_mlmc+=[torch.sum(N*(M**np.arange(0,L+1)))*e**2]
+
+            #e^2*cost
+            cost_mlmc+=[torch.sum(N*(M**np.arange(0,L+1)+np.hstack((0,M**np.arange(0,L)))))*e**2] #cost is number of NFE
             cost_mc+=[2*torch.sum(V_p*(M**np.arange(L+1)))]
             
             axis_list[2].semilogy(range(L+1),N,'k-',marker=markers[i],label=f'{e}',markersize=markersize,

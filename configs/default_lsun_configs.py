@@ -1,6 +1,7 @@
 import ml_collections
+import os
+os.environ['CUDA_VISIBLE_DEVICES']="1,2,3"
 import torch
-
 
 def get_default_configs():
   config = ml_collections.ConfigDict()
@@ -66,7 +67,10 @@ def get_default_configs():
   optim.warmup = 5000
   optim.grad_clip = 1.
 
+  #MLMC
+  config.mlmc = mlmc = ml_collections.ConfigDict()
+  mlmc.acc=[.5,.1,.01,.005,.001]
   config.seed = 42
   config.device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
-
+  print(torch.cuda.list_gpu_processes(torch.device('cuda:0')))
   return config
