@@ -16,11 +16,14 @@
 """Training and evaluation"""
 
 import run_lib
+import argparse
+import sys
 from absl import app
 from absl import flags
 from ml_collections.config_flags import config_flags
 import logging
 import os
+import torch
 import tensorflow as tf
 import MLMC
 FLAGS = flags.FLAGS
@@ -51,7 +54,13 @@ def main(argv):
     run_lib.train(FLAGS.config, FLAGS.workdir)
   elif FLAGS.mode == "eval":
     # Run the evaluation pipeline
-    MLMC.mlmc_test(FLAGS.config.mlmc.acc)
+    parser=argparse.ArgumentParser()
+    parser.add_argument("--config", help="path to config file")
+    parser.add_argument("--mode", help="eval or exp")
+    parser.add_argument("--workdir", help="path to workidir")
+    args=parser.parse_args()
+    cpointdir=args.config.split('/')[-1][:-3]
+    MLMC.mlmc_test(FLAGS.config,FLAGS.workdir,cpointdir)
   else:
     raise ValueError(f"Mode {FLAGS.mode} not recognized.")
 
