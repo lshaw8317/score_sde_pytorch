@@ -1,6 +1,4 @@
 import ml_collections
-import os
-os.environ['CUDA_VISIBLE_DEVICES']="1,2,3"
 import torch
 
 def get_default_configs():
@@ -31,7 +29,7 @@ def get_default_configs():
   config.eval = evaluate = ml_collections.ConfigDict()
   evaluate.begin_ckpt = 50
   evaluate.end_ckpt = 96
-  evaluate.batch_size = 512
+  evaluate.batch_size = 48
   evaluate.enable_sampling = True
   evaluate.num_samples = 50000
   evaluate.enable_loss = True
@@ -70,7 +68,11 @@ def get_default_configs():
   #MLMC
   config.mlmc = mlmc = ml_collections.ConfigDict()
   mlmc.acc=[.5,.1,.01,.005,.001]
+  mlmc.N0=10**2
+  mlmc.min_l=7
+  mlmc.Nsamples=10**5
+  mlmc.M=2
+  mlmc.Lmax=11
   config.seed = 42
   config.device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
-  print(torch.cuda.list_gpu_processes(torch.device('cuda:0')))
   return config

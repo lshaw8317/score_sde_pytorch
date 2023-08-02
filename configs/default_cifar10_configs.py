@@ -69,6 +69,11 @@ def get_default_configs():
   #MLMC
   config.mlmc = mlmc = ml_collections.ConfigDict()
   mlmc.acc=[.5,.1,.05,.01,.005,.001]
+  mlmc.N0=10**2
+  mlmc.min_l=2
+  mlmc.Nsamples=10**5
+  mlmc.M=2
+  mlmc.Lmax=8
   config.seed = 42
   config.device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 

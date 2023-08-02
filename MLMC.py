@@ -42,6 +42,8 @@ def imagenorm(img):
 
 def mlmc_test(config,workdir,cpointdir):
     acc=config.mlmc.acc
+    config.device=torch.device("cuda:1")
+    
     torch.cuda.empty_cache()
     # Create data normalizer and its inverse
     denoise=True
@@ -65,7 +67,8 @@ def mlmc_test(config,workdir,cpointdir):
     loaded_state = torch.load(ckpt_dir, map_location='cpu')
     model.load_state_dict(loaded_state['model'], strict=False)
     model.to(config.device)
-    model = torch.nn.DataParallel(model)
+    model = torch.nn.DataParallel(model,device_ids=[1,2,3])
+    #model=torch.nn.DataParallel(model)
 
     sampling_shape = (config.eval.batch_size,
                       config.data.num_channels,
@@ -82,7 +85,7 @@ def mlmc_test(config,workdir,cpointdir):
     else:
         raise NotImplementedError(f"SDE {config.training.sde} unknown.")
 
-    score_fn=mutils.get_score_fn(sde, model)
+    score_fn=mutils.get_score_fn(sde, model,continuous=config.training.continuous)
     rsde = sde.reverse(score_fn, probability_flow=False)
     
     def EulerMaruyama(x, t, dt, dW):
@@ -102,35 +105,36 @@ def mlmc_test(config,workdir,cpointdir):
         Returns:
             Xf,Xc (numpy.array) : final samples for N_loop sample paths (Xc=X0 if l==0)
         """
+
         with torch.no_grad():
             xf = sde.prior_sampling((bs,*sampling_shape[-3:])).to(config.device)
             xc = xf.clone().detach().to(config.device)
             Nf=M**l
             #Nc=M**(l-1) implicitly
-            fine_times = torch.linspace(sde.T, sampling_eps,Nf+1, device=xf.device)
+            fine_times = torch.linspace(sde.T, sampling_eps,Nf+1, device=xf.device,dtype=torch.float32)
             dWc=torch.zeros_like(xf).to(xc.device)
-            dtc=0
-            tc=torch.tensor([sde.T]).to(xc.device)
+            dtc=0.
+            tc=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
             for i in range(Nf):
                 tf = fine_times[i]
                 dt=fine_times[i+1]-tf
                 dtc+=dt #running sum of coarse timestep
-                vec_t = torch.ones(bs, device=tf.device) * tf
+                vec_t = torch.ones(bs, device=tf.device, dtype=torch.float32) * tf
                 dWf = torch.randn_like(xf)*torch.sqrt(-dt)
                 dWc+=dWf
                 xf,xf_mean=EulerMaruyama(xf,vec_t,dt,dWf)
                 if i%M==0: #if i is integer multiple of M...
-                    vec_t = torch.ones(bs, device=tc.device) * tc
+                    vec_t = torch.ones(bs, device=tc.device,dtype=torch.float32) * tc
                     xc,xc_mean=EulerMaruyama(xc,vec_t,dtc,dWc) #...Develop coarse path
                     dWc=torch.zeros_like(xc) #...Re-initialise coarse BI to 0
                     tc=tf.clone().detach() #coarse solution now advanced to current fine time
-                    dtc=0
+                    dtc=0.
             if denoise:
                 return inverse_scaler(xf_mean),inverse_scaler(xc_mean)
             else:
                 return inverse_scaler(xf),inverse_scaler(xc)
         
-    def looper(Nl,l,M):
+    def looper(Nl,l,M,min_l=0):
         """ 
         Interfaces with mlmc function to implement loop over Nl samples and generate payoff sums.
       
@@ -153,9 +157,11 @@ def mlmc_test(config,workdir,cpointdir):
             Xf,Xc=mlmc_sample(bs,l,M) #should automatically use cuda
             sumXf=torch.sum(Xf,axis=0).to('cpu') #sum over batch size
             sumXf2=torch.sum(imagenorm(Xf)**2,axis=0).to('cpu').item()
-            if l==0:
+            if l==min_l:
                 sqsums+=torch.tensor([sumXf2,sumXf2,0,0]).reshape(sqsums.shape)
                 sums+=torch.stack([sumXf,sumXf,torch.zeros_like(sumXf)])
+            elif l<min_l:
+                raise ValueError("l must be at least min_l")
             else:
                 dX_l=Xf-Xc #Image difference
                 sumdX_l=torch.sum(dX_l,axis=0).to('cpu') #sum over batch size
@@ -183,7 +189,7 @@ def mlmc_test(config,workdir,cpointdir):
         return sums,sqsums 
     
     ##MLMC function
-    def mlmc(acc,M=2,N0=10**2, warm_start=True):
+    def mlmc(acc,M=2,N0=10**2, warm_start=True,min_l=0):
         """
         Runs MLMC algorithm which returns an array of sums at each level.
         ________________
@@ -205,22 +211,24 @@ def mlmc_test(config,workdir,cpointdir):
         alpha=max(0,alpha_0)
         beta=max(0,beta_0)
         
-        L=2
-    
-        V=torch.zeros(L+1) #Initialise variance vector of each levels' variance
-        N=torch.zeros(L+1) #Initialise num. samples vector of each levels' num. samples
-        dN=N0*torch.ones(L+1) #Initialise additional samples for this iteration vector for each level
-        sqsums=torch.zeros((L+1,4,1)) #Initialise sqsums array of normed [dX^2,Xf^2,Xc^2,XcXf], each column is a level
-        sqrt_h=torch.sqrt(M**(torch.arange(0,L+1,dtype=torch.float32)))
-        sums=torch.zeros((L+1,3,*sampling_shape[-3:])) #Initialise sums array of unnormed [dX,Xf,Xc], each column is a level
+        L=min_l+2
+
+        mylen=L+1-min_l
+        V=torch.zeros(mylen) #Initialise variance vector of each levels' variance
+        N=torch.zeros(mylen) #Initialise num. samples vector of each levels' num. samples
+        dN=N0*torch.ones(mylen) #Initialise additional samples for this iteration vector for each level
+        sqsums=torch.zeros((mylen,4,1)) #Initialise sqsums array of normed [dX^2,Xf^2,Xc^2,XcXf], each column is a level
+        sqrt_h=torch.sqrt(M**(torch.arange(min_l,L+1,dtype=torch.float32)))
+        sums=torch.zeros((mylen,3,*sampling_shape[-3:])) #Initialise sums array of unnormed [dX,Xf,Xc], each column is a level
     
         while (torch.sum(dN)>0): #Loop until no additional samples asked for
-            for l in range(L+1):
-                num=dN[l]
+            mylen=L+1-min_l
+            for i,l in enumerate(torch.arange(min_l,L+1)):
+                num=dN[i]
                 if num>0: #If asked for additional samples...
-                    tempsums,tempsqsums=looper(int(num),l,M) #Call function which gives sums
-                    sqsums[l,...]+=tempsqsums
-                    sums[l,...]+=tempsums
+                    tempsums,tempsqsums=looper(int(num),l,M,min_l=min_l) #Call function which gives sums
+                    sqsums[i,...]+=tempsqsums
+                    sums[i,...]+=tempsums
                     
             N+=dN #Increment samples taken counter for each level
             Yl=imagenorm(sums[:,0])/N
@@ -233,13 +241,13 @@ def mlmc_test(config,workdir,cpointdir):
             if alpha_0==0: #Estimate order of weak convergence using LR
                 #Yl=(M^alpha-1)khl^alpha=(M^alpha-1)k(TM^-l)^alpha=((M^alpha-1)kT^alpha)M^(-l*alpha)
                 #=>log(Yl)=log(k(M^alpha-1)T^alpha)-alpha*l*log(M)
-                X=torch.ones((L,2))
-                X[:,0]=torch.arange(1,L+1)
+                X=torch.ones((mylen-1,2))
+                X[:,0]=torch.arange(min_l+1,L+1)
                 a = torch.lstsq(torch.log(Yl[1:]),X)[0]
                 alpha = max(-a[0]/np.log(M),.5)
             if beta_0==0: #Estimate order of variance convergence using LR
-                X=torch.ones((L,2))
-                X[:,0]=torch.arange(1,L+1)
+                X=torch.ones((mylen-1,2))
+                X[:,0]=torch.arange(min_l+1,L+1)
                 b = torch.lstsq(torch.log(V[1:]),X)[0]
                 beta= max(-b[0]/np.log(M),.5)
     
@@ -268,7 +276,7 @@ def mlmc_test(config,workdir,cpointdir):
             print(f'    Saved estimated beta_0 = {beta}')
         return sums,sqsums,N
     
-    def Giles_plot(acc,markers,M=2,N0=10**2,Lmax=8,Nsamples=10**5):
+    def Giles_plot(acc,markers):
         """
         Plots variance/mean and cost/number of levels plots a la Giles 2008.
         
@@ -282,6 +290,10 @@ def mlmc_test(config,workdir,cpointdir):
             Nsamples(int) = 10**5 : number of samples to use to estimate variance/mean
         """
         #Set plotting params
+        M=config.mlmc.M
+        N0=config.mlmc.N0
+        Lmax=config.mlmc.Lmax
+        Nsamples=config.mlmc.Nsamples
         print('Successfully called GilesPlot')
         fig,_=plt.subplots(2,2)
         label='Testing MLMC Diffusion Models'
@@ -295,20 +307,20 @@ def mlmc_test(config,workdir,cpointdir):
         #Initialise complexity lists
         cost_mlmc=[]
         cost_mc=[]
-        
+        min_l=config.mlmc.min_l
         #Do the calculations and simulations for num levels and complexity plot
         for i in range(len(acc)):
             e=acc[i]
-            sums,sqsums,N=mlmc(e,M,warm_start=False,N0=N0) #sums=[dX,Xf,Xc], sqsums=[||dX||^2,||Xf||^2,||Xc||^2]
-            L=len(N)-1
+            sums,sqsums,N=mlmc(e,M,warm_start=False,N0=N0,min_l=min_l) #sums=[dX,Xf,Xc], sqsums=[||dX||^2,||Xf||^2,||Xc||^2]
+            L=len(N)-1+min_l
             means_p=imagenorm(sums[:,1])/N #Norm of mean of fine discretisations
             V_p=(sqsums[:,1]/N)-means_p**2
 
             #e^2*cost
-            cost_mlmc+=[torch.sum(N*(M**np.arange(0,L+1)+np.hstack((0,M**np.arange(0,L)))))*e**2] #cost is number of NFE
-            cost_mc+=[2*torch.sum(V_p*(M**np.arange(L+1)))]
+            cost_mlmc+=[torch.sum(N*(M**np.arange(min_l,L+1)+np.hstack((0,M**np.arange(min_l,L)))))*e**2] #cost is number of NFE
+            cost_mc+=[2*torch.sum(V_p*(M**np.arange(min_l,L+1)))]
             
-            axis_list[2].semilogy(range(L+1),N,'k-',marker=markers[i],label=f'{e}',markersize=markersize,
+            axis_list[2].semilogy(range(min_l,L+1),N,'k-',marker=markers[i],label=f'{e}',markersize=markersize,
                            markerfacecolor="None",markeredgecolor='k', markeredgewidth=1)
             
             # Directory to save means, norms and N
@@ -332,11 +344,11 @@ def mlmc_test(config,workdir,cpointdir):
                 fout.write(io_buffer.getvalue())
             
         #Variance and mean samples
-        sums=torch.zeros((Lmax+1,*sums.shape[1:]))
-        sqsums=torch.zeros((Lmax+1,*sqsums.shape[1:]))
+        sums=torch.zeros((Lmax+1-min_l,*sums.shape[1:]))
+        sqsums=torch.zeros((Lmax+1-min_l,*sqsums.shape[1:]))
     
-        for l in range(Lmax+1):
-            sums[l],sqsums[l] = looper(Nsamples,l,M)
+        for l in range(min_l,Lmax+1):
+            sums[l],sqsums[l] = looper(Nsamples,l,M,min_l=min_l)
         
         means_p=imagenorm(sums[:,1]/Nsamples)
         V_p=(sqsums[:,1].squeeze()/Nsamples)-means_p**2 
@@ -344,16 +356,16 @@ def mlmc_test(config,workdir,cpointdir):
         V_dp=(sqsums[:,0].squeeze()/Nsamples)-means_dp**2  
         
         #Plot variances
-        axis_list[0].plot(range(Lmax+1),np.log(V_p)/np.log(M),'k:',label='$P_{l}$',
+        axis_list[0].plot(range(min_l,Lmax+1),np.log(V_p)/np.log(M),'k:',label='$P_{l}$',
                           marker=(8,2,0),markersize=markersize,markerfacecolor="None",markeredgecolor='k', markeredgewidth=1)
-        axis_list[0].plot(range(1,Lmax+1),np.log(V_dp[1:])/np.log(M),'k-',label='$P_{l}-P_{l-1}$',
+        axis_list[0].plot(range(min_l+1,Lmax+1),np.log(V_dp[1:])/np.log(M),'k-',label='$P_{l}-P_{l-1}$',
                           marker=(8,2,0), markersize=markersize, markerfacecolor="None", markeredgecolor='k',
                           markeredgewidth=1)
         #Plot means
-        axis_list[1].plot(range(Lmax+1),np.log(means_p)/np.log(M),'k:',label='$P_{l}$',
+        axis_list[1].plot(range(min_l,Lmax+1),np.log(means_p)/np.log(M),'k:',label='$P_{l}$',
                           marker=(8,2,0), markersize=markersize, markerfacecolor="None",markeredgecolor='k',
                           markeredgewidth=1)
-        axis_list[1].plot(range(1,Lmax+1),np.log(means_dp[1:])/np.log(M),'k-',label='$P_{l}-P_{l-1}$',
+        axis_list[1].plot(range(min_l+1,Lmax+1),np.log(means_dp[1:])/np.log(M),'k-',label='$P_{l}-P_{l-1}$',
                           marker=(8,2,0),markersize=markersize,markerfacecolor="None",markeredgecolor='k', markeredgewidth=1)
         
         # Directory to save means and norms
@@ -372,8 +384,8 @@ def mlmc_test(config,workdir,cpointdir):
             fout.write(io_buffer.getvalue())
             
         #Estimate orders of weak (alpha from means) and strong (beta from variance) convergence using LR
-        X=np.ones((Lmax,2))
-        X[:,0]=np.arange(1,Lmax+1)
+        X=np.ones((Lmax-min_l,2))
+        X[:,0]=np.arange(min_l+1,Lmax+1)
         a = np.linalg.lstsq(X,np.log(means_dp[1:]),rcond=None)[0]
         alpha = -a[0]/np.log(M)
         b = np.linalg.lstsq(X,np.log(V_dp[1:]),rcond=None)[0]
@@ -430,7 +442,7 @@ def mlmc_test(config,workdir,cpointdir):
         f=os.path.join(eval_dir,'GilesPlot.pdf')
         fig.savefig(f, format='pdf', bbox_inches='tight')
         return None
-    acc=[.01]
+    
     markers=[i for i in range(len(acc))]
     Giles_plot(acc,markers)
     
