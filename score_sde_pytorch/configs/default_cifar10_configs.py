@@ -50,7 +50,7 @@ def get_default_configs():
   config.model = model = ml_collections.ConfigDict()
   model.sigma_min = 0.01
   model.sigma_max = 50
-  model.num_scales = 1000
+  model.num_scales = 2000
   model.beta_min = 0.1
   model.beta_max = 20.
   model.dropout = 0.1
@@ -70,10 +70,10 @@ def get_default_configs():
   config.mlmc = mlmc = ml_collections.ConfigDict()
   mlmc.acc=[.5,.1,.05,.01,.005,.001]
   mlmc.N0=10**2
-  mlmc.min_l=2
+  mlmc.min_l=3
   mlmc.Nsamples=10**5
   mlmc.M=2
-  mlmc.Lmax=8
+  mlmc.Lmax=10
   config.seed = 42
   config.device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 

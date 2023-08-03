@@ -75,6 +75,16 @@ def mlmc_test(config,workdir,cpointdir):
                       config.data.image_size, config.data.image_size)
     if config.training.sde.lower() == 'vpsde':
         sde = sde_lib.VPSDE(beta_min=config.model.beta_min, beta_max=config.model.beta_max, N=config.model.num_scales)
+        def getbetas(x, t, dt):
+            timestep = (t * (sde.N - 1) / sde.T).long()
+            timestepm1 = ((t+dt) * (sde.N - 1) / sde.T).long()
+
+            beta = sde.discrete_betas.to(x.device)[timestep]
+            stdt =sde.sqrt_1m_alphas_cumprod.to(x.device)[timestep]
+            stdtm1 =sde.sqrt_1m_alphas_cumprod.to(x.device)[timestepm1]
+            
+            return beta, stdt,stdtm1
+        eta=config.mlmc.DDIM_eta
         sampling_eps = 1e-3
     elif config.training.sde.lower() == 'subvpsde':
         sde = sde_lib.subVPSDE(beta_min=config.model.beta_min, beta_max=config.model.beta_max, N=config.model.num_scales)
@@ -94,6 +104,16 @@ def mlmc_test(config,workdir,cpointdir):
         x = x_mean + diffusion[:, None, None, None] * dW
         return x, x_mean
     
+    def DDIMSampler(x, t, dt, dW):
+        beta, stdt, stdtm1 = getbetas(x,t,dt)
+        stheta=score_fn(x,t)
+        x_mean = (x + stheta)/torch.sqrt(1.-beta)-torch.sqrt(stdt**2-eta**2*beta)*stdtm1*stheta
+        x = x_mean + eta * stdtm1*torch.sqrt(beta)/stdt*dW/torch.sqrt(-dt)
+        return x, x_mean
+    if config.mlmc.sampler.lowercase()=='ddim':
+        samplerfun=DDIMSampler
+    else:
+        samplerfun=EulerMaruyama
     def mlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False):
         """ 
         The path function for Euler-Maruyama diffusion, which calculates final samples \sim p(x_0).
@@ -122,10 +142,10 @@ def mlmc_test(config,workdir,cpointdir):
                 vec_t = torch.ones(bs, device=tf.device, dtype=torch.float32) * tf
                 dWf = torch.randn_like(xf)*torch.sqrt(-dt)
                 dWc+=dWf
-                xf,xf_mean=EulerMaruyama(xf,vec_t,dt,dWf)
+                xf,xf_mean=samplerfun(xf,vec_t,dt,dWf)
                 if i%M==0: #if i is integer multiple of M...
                     vec_t = torch.ones(bs, device=tc.device,dtype=torch.float32) * tc
-                    xc,xc_mean=EulerMaruyama(xc,vec_t,dtc,dWc) #...Develop coarse path
+                    xc,xc_mean=samplerfun(xc,vec_t,dtc,dWc) #...Develop coarse path
                     dWc=torch.zeros_like(xc) #...Re-initialise coarse BI to 0
                     tc=tf.clone().detach() #coarse solution now advanced to current fine time
                     dtc=0.
@@ -277,37 +297,18 @@ def mlmc_test(config,workdir,cpointdir):
         return sums,sqsums,N
     
     def Giles_plot(acc,markers):
-        """
-        Plots variance/mean and cost/number of levels plots a la Giles 2008.
-        
-        Parameters:
-            acc(list-like) : desired accuracy of MLMC
-            label(str) : plot title
-            fig : figure to plot onto
-            M(int) = 2 : coarseness factor
-            N0(int) = 10**3 : min samples per level
-            Lmax(int) = 8 : max level to estimate variance/mean of P_l-P_l-1
-            Nsamples(int) = 10**5 : number of samples to use to estimate variance/mean
-        """
         #Set plotting params
         M=config.mlmc.M
         N0=config.mlmc.N0
         Lmax=config.mlmc.Lmax
         Nsamples=config.mlmc.Nsamples
         print('Successfully called GilesPlot')
-        fig,_=plt.subplots(2,2)
-        label='Testing MLMC Diffusion Models'
-        markersize=(fig.get_size_inches()[0])
-        if len(acc)!=len(markers):
-            raise ValueError("Length of markers argument must be same as length of accuracy argument.")
-        axis_list=fig.axes
-        if len(axis_list)!=4:
-            print('Expected 4 subplots in fig, attempting to proceed but may fail.')
         
         #Initialise complexity lists
         cost_mlmc=[]
         cost_mc=[]
         min_l=config.mlmc.min_l
+        
         #Do the calculations and simulations for num levels and complexity plot
         for i in range(len(acc)):
             e=acc[i]
@@ -315,13 +316,10 @@ def mlmc_test(config,workdir,cpointdir):
             L=len(N)-1+min_l
             means_p=imagenorm(sums[:,1])/N #Norm of mean of fine discretisations
             V_p=(sqsums[:,1]/N)-means_p**2
-
+            
             #e^2*cost
             cost_mlmc+=[torch.sum(N*(M**np.arange(min_l,L+1)+np.hstack((0,M**np.arange(min_l,L)))))*e**2] #cost is number of NFE
             cost_mc+=[2*torch.sum(V_p*(M**np.arange(min_l,L+1)))]
-            
-            axis_list[2].semilogy(range(min_l,L+1),N,'k-',marker=markers[i],label=f'{e}',markersize=markersize,
-                           markerfacecolor="None",markeredgecolor='k', markeredgewidth=1)
             
             # Directory to save means, norms and N
             this_sample_dir = os.path.join(eval_dir, f"M_{M}_accuracy_{e}")
@@ -342,7 +340,15 @@ def mlmc_test(config,workdir,cpointdir):
                 io_buffer = io.BytesIO()
                 torch.save(N,io_buffer)
                 fout.write(io_buffer.getvalue())
-            
+                
+            meanimg=torch.sum(sums[:,0]/N[...,None,None,None],axis=0)
+            meanimg=np.clip(meanimg.permute(1, 2, 0).cpu().numpy() * 255., 0, 255).astype(np.uint8)
+            # Write samples to disk or Google Cloud Storage
+            with tf.io.gfile.GFile(os.path.join(this_sample_dir, "meanimg.npz"), "wb") as fout:
+              io_buffer = io.BytesIO()
+              np.savez_compressed(io_buffer, meanimg=meanimg)
+              fout.write(io_buffer.getvalue())
+
         #Variance and mean samples
         sums=torch.zeros((Lmax+1-min_l,*sums.shape[1:]))
         sqsums=torch.zeros((Lmax+1-min_l,*sqsums.shape[1:]))
@@ -354,19 +360,6 @@ def mlmc_test(config,workdir,cpointdir):
         V_p=(sqsums[:,1].squeeze()/Nsamples)-means_p**2 
         means_dp=imagenorm(sums[:,0]/Nsamples)
         V_dp=(sqsums[:,0].squeeze()/Nsamples)-means_dp**2  
-        
-        #Plot variances
-        axis_list[0].plot(range(min_l,Lmax+1),np.log(V_p)/np.log(M),'k:',label='$P_{l}$',
-                          marker=(8,2,0),markersize=markersize,markerfacecolor="None",markeredgecolor='k', markeredgewidth=1)
-        axis_list[0].plot(range(min_l+1,Lmax+1),np.log(V_dp[1:])/np.log(M),'k-',label='$P_{l}-P_{l-1}$',
-                          marker=(8,2,0), markersize=markersize, markerfacecolor="None", markeredgecolor='k',
-                          markeredgewidth=1)
-        #Plot means
-        axis_list[1].plot(range(min_l,Lmax+1),np.log(means_p)/np.log(M),'k:',label='$P_{l}$',
-                          marker=(8,2,0), markersize=markersize, markerfacecolor="None",markeredgecolor='k',
-                          markeredgewidth=1)
-        axis_list[1].plot(range(min_l+1,Lmax+1),np.log(means_dp[1:])/np.log(M),'k-',label='$P_{l}-P_{l-1}$',
-                          marker=(8,2,0),markersize=markersize,markerfacecolor="None",markeredgecolor='k', markeredgewidth=1)
         
         # Directory to save means and norms
         this_sample_dir = os.path.join(eval_dir, f"VarMean_M_{M}_Nsamples_{Nsamples}")
@@ -391,60 +384,12 @@ def mlmc_test(config,workdir,cpointdir):
         b = np.linalg.lstsq(X,np.log(V_dp[1:]),rcond=None)[0]
         beta = -b[0]/np.log(M) 
         
-        with open(os.path.join(this_sample_dir, "info_text.txt"),'w') as f:
-            f.write(f'Estimated alpha={alpha}\n Estimated beta={beta}')
-                    
-        #Label variance plot
-        axis_list[0].set_xlabel('$l$')
-        axis_list[0].set_ylabel(f'log$_{M}$(var)')
-        axis_list[0].legend(framealpha=0.6, frameon=True)
-        axis_list[0].xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
-        #Add estimated beta
-        # s='$\\beta$ = {}'.format(round(beta,2))
-        # t = axis_list[0].annotate(s, (Lmax/2, np.log(V_dp[2])/np.log(M)),fontsize=markersize,
-        #         bbox=dict(ec='None',facecolor='None',lw=2))
+        with open(os.path.join(this_sample_dir, "info_text.txt"),'a') as f:
+            f.write(f'Estimated alpha={alpha}\n Estimated beta={beta}\n')
         
-        #Label means plot
-        axis_list[1].set_xlabel('$l$')
-        axis_list[1].set_ylabel(f'log$_{M}$(mean)')
-        axis_list[1].legend(framealpha=0.6, frameon=True)
-        axis_list[1].xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
-        #Add estimated alpha
-        # s='$\\alpha$ = {}'.format(round(alpha,2))
-        # t = axis_list[1].annotate(s, (Lmax/2, np.log(means_dp[1])/np.log(M)), fontsize=markersize,
-        #         bbox=dict(ec='None',facecolor='None',lw=2))
-        
-        #Label number of levels plot
-        axis_list[2].set_xlabel('$l$')
-        axis_list[2].set_ylabel('$N_l$')
-        xa=axis_list[2].xaxis
-        xa.set_major_locator(ticker.MaxNLocator(integer=True))
-        (lines,labels)=axis_list[2].get_legend_handles_labels()
-        ncol=1
-        leg = Legend(axis_list[2], lines, labels, ncol=ncol, title='Accuracy',
-                     frameon=True, framealpha=0.6)
-        leg._legend_box.align = "right"
-        axis_list[2].add_artist(leg)
-            
-        #Label and plot complexity plot
-        axis_list[3].loglog(acc,cost_mc,'k:',marker=(8,2,0),markersize=markersize,
-                     markerfacecolor="None",markeredgecolor='k', markeredgewidth=1,label='Std. MC')
-        axis_list[3].loglog(acc,cost_mlmc,'k-',marker=(8,2,0),markersize=markersize,
-                     markerfacecolor="None",markeredgecolor='k', markeredgewidth=1,label='Std. MLMC')
-        axis_list[3].set_xlabel('Acc. $a$')
-        axis_list[3].set_ylabel('$a^{2}$cost')
-        axis_list[3].legend(frameon=True,framealpha=0.6)
-        
-        #Add title and space out subplots
-        fig.suptitle(label+f'\n$M={M}$')
-        fig.tight_layout(rect=[0, 0.03, 1, 0.94],h_pad=1,w_pad=1,pad=1)
-                
-        f=os.path.join(eval_dir,'GilesPlot.pdf')
-        fig.savefig(f, format='pdf', bbox_inches='tight')
         return None
     
-    markers=[i for i in range(len(acc))]
-    Giles_plot(acc,markers)
+    Giles_plot(acc)
     
     # eval_dir = os.path.join(workdir, 'eval')
     # tf.io.gfile.makedirs(eval_dir)
