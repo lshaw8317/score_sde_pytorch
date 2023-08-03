@@ -64,5 +64,5 @@ def get_config():
   model.conv_size = 3
   
   config.mlmc.DDIM_eta=.5
-  
+  config.mlmc.sampler='DDIM'
   return config

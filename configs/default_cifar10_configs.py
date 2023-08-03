@@ -74,6 +74,7 @@ def get_default_configs():
   mlmc.Nsamples=10**5
   mlmc.M=2
   mlmc.Lmax=10
+  mlmc.sampler='EM'
   config.seed = 42
   config.device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 
