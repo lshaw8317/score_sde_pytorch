@@ -40,9 +40,9 @@ def imagenorm(img):
     n/=np.prod(s[-3:])
     return n
 
-def mlmc_test(config,workdir,cpointdir):
+def mlmc_test(config,eval_dir,checkpoint_dir):
     acc=config.mlmc.acc
-    config.device=torch.device("cuda:1")
+    #config.device=torch.device("cuda:1")
     
     torch.cuda.empty_cache()
     # Create data normalizer and its inverse
@@ -55,11 +55,9 @@ def mlmc_test(config,workdir,cpointdir):
     inceptionv3 = config.data.image_size >= 256
     inception_model = evaluation.get_inception_model(inceptionv3=inceptionv3)
 
-    checkpoint_dir = os.path.join(workdir, "checkpoints",cpointdir)
     dirs=os.listdir(checkpoint_dir)
     ckpt = np.min(np.array([int(d.split('_')[-1][:-4]) for d in dirs]))
     ckpt_dir = os.path.join(checkpoint_dir, f'checkpoint_{ckpt}.pth')
-    eval_dir = os.path.join(workdir, 'eval',cpointdir)
     tf.io.gfile.makedirs(eval_dir)
     
     # Initialize model
@@ -67,8 +65,8 @@ def mlmc_test(config,workdir,cpointdir):
     loaded_state = torch.load(ckpt_dir, map_location='cpu')
     model.load_state_dict(loaded_state['model'], strict=False)
     model.to(config.device)
-    model = torch.nn.DataParallel(model,device_ids=[1,2,3])
-    #model=torch.nn.DataParallel(model)
+    #model = torch.nn.DataParallel(model,device_ids=[1,2,3])
+    model=torch.nn.DataParallel(model)
 
     sampling_shape = (config.eval.batch_size,
                       config.data.num_channels,
@@ -105,12 +103,12 @@ def mlmc_test(config,workdir,cpointdir):
         return x, x_mean
     
     def DDIMSampler(x, t, dt, dW):
-        beta, stdt, stdtm1 = getbetas(x,t,dt)
+        beta, stdt, stdtm1 = getbetas(x,t[0],dt) #t should be vector of copies of times so just get first element
         stheta=score_fn(x,t)
         x_mean = (x + stheta)/torch.sqrt(1.-beta)-torch.sqrt(stdt**2-eta**2*beta)*stdtm1*stheta
         x = x_mean + eta * stdtm1*torch.sqrt(beta)/stdt*dW/torch.sqrt(-dt)
         return x, x_mean
-    if config.mlmc.sampler.lowercase()=='ddim':
+    if config.mlmc.sampler.lower()=='ddim':
         samplerfun=DDIMSampler
     else:
         samplerfun=EulerMaruyama
@@ -296,7 +294,7 @@ def mlmc_test(config,workdir,cpointdir):
             print(f'    Saved estimated beta_0 = {beta}')
         return sums,sqsums,N
     
-    def Giles_plot(acc,markers):
+    def Giles_plot(acc):
         #Set plotting params
         M=config.mlmc.M
         N0=config.mlmc.N0
