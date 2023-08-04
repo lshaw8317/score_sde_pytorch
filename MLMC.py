@@ -58,7 +58,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir):
     dirs=os.listdir(checkpoint_dir)
     ckpt = np.min(np.array([int(d.split('_')[-1][:-4]) for d in dirs]))
     ckpt_dir = os.path.join(checkpoint_dir, f'checkpoint_{ckpt}.pth')
-    tf.io.gfile.makedirs(eval_dir)
+    if not tf.io.gfile.exists(eval_dir):
+        tf.io.gfile.makedirs(eval_dir)
     
     # Initialize model
     model = mutils.get_model(config.model.name)(config)
@@ -306,7 +307,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir):
         cost_mlmc=[]
         cost_mc=[]
         min_l=config.mlmc.min_l
-        
+        '''
         #Do the calculations and simulations for num levels and complexity plot
         for i in range(len(acc)):
             e=acc[i]
@@ -346,13 +347,15 @@ def mlmc_test(config,eval_dir,checkpoint_dir):
               io_buffer = io.BytesIO()
               np.savez_compressed(io_buffer, meanimg=meanimg)
               fout.write(io_buffer.getvalue())
-
+        '''
         #Variance and mean samples
+        sums=torch.zeros((1,3,*sampling_shape[1:]))
+        sqsums=torch.zeros((1,4,1))
         sums=torch.zeros((Lmax+1-min_l,*sums.shape[1:]))
         sqsums=torch.zeros((Lmax+1-min_l,*sqsums.shape[1:]))
     
-        for l in range(min_l,Lmax+1):
-            sums[l],sqsums[l] = looper(Nsamples,l,M,min_l=min_l)
+        for i,l in enumerate(torch.arange(min_l,Lmax+1)):
+            sums[i],sqsums[i] = looper(Nsamples,l,M,min_l=min_l)
         
         means_p=imagenorm(sums[:,1]/Nsamples)
         V_p=(sqsums[:,1].squeeze()/Nsamples)-means_p**2 
