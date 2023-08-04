@@ -36,9 +36,52 @@ alpha_0=0;beta_0=0
 
 def imagenorm(img):
     s=img.shape
-    n=torch.linalg.norm(torch.flatten(img, start_dim=-3, end_dim=-1),dim=-1) #flattens non-batch dims and calculates norm
-    n/=np.prod(s[-3:])
+    if len(s)==1: #fix for when img is single dimensional (batch_size,) -> (batch_size,1)
+        img=img[:,None]
+    n=torch.linalg.norm(torch.flatten(img, start_dim=1, end_dim=-1),dim=-1) #flattens non-batch dims and calculates norm
+    n/=np.prod(s[1:])
     return n
+
+def activations_payoff(samples,inception_model,inceptionv3,config):
+    samples=np.clip(samples.permute(0, 2, 3, 1).numpy() * 255., 0, 255).astype(np.uint8)
+    # Force garbage collection before calling TensorFlow code for Inception network
+    gc.collect()
+    latents = evaluation.run_inception_distributed(samples, inception_model,
+                                                    inceptionv3=inceptionv3)
+    # Force garbage collection again before returning to JAX code
+    gc.collect()
+    
+    # Compute inception scores, FIDs and KIDs.
+    # Load all statistics that have been previously computed and saved for each host
+    # all_logits = latents["logits"]
+    all_pools = latents["pool_3"]
+
+    # if not inceptionv3:
+    #   all_logits = np.concatenate(all_logits, axis=0)
+    # all_pools = np.concatenate(all_pools, axis=0)
+    
+    # Load pre-computed dataset statistics.
+    # data_stats = evaluation.load_dataset_stats(config)
+    # data_pools = data_stats["pool_3"]
+    
+    # # Compute FID/KID/IS on all samples together.
+    # if not inceptionv3:
+    #   inception_score = tfgan.eval.classifier_score_from_logits(all_logits)
+    # else:
+    #   inception_score = -1
+    
+    # fid = tfgan.eval.frechet_classifier_distance_from_activations(
+    #   data_pools, all_pools)
+    # # Hack to get tfgan KID work for eager execution.
+    # tf_data_pools = tf.convert_to_tensor(data_pools)
+    # tf_all_pools = tf.convert_to_tensor(all_pools)
+    # kid = tfgan.eval.kernel_classifier_distance_from_activations(
+    #   tf_data_pools, tf_all_pools).numpy()
+    # del tf_data_pools, tf_all_pools
+    
+    # logging.info(
+    #   " --- inception_score: %.6e, FID: %.6e, KID: %.6e" % (inception_score, fid, kid))
+    return all_pools #should have batch_size
 
 def mlmc_test(config,eval_dir,checkpoint_dir):
     acc=config.mlmc.acc
@@ -58,7 +101,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir):
     dirs=os.listdir(checkpoint_dir)
     ckpt = np.min(np.array([int(d.split('_')[-1][:-4]) for d in dirs]))
     ckpt_dir = os.path.join(checkpoint_dir, f'checkpoint_{ckpt}.pth')
-    tf.io.gfile.makedirs(eval_dir)
+    if not tf.io.gfile.exists(eval_dir):
+        tf.io.gfile.makedirs(eval_dir)
     
     # Initialize model
     model = mutils.get_model(config.model.name)(config)
@@ -108,10 +152,18 @@ def mlmc_test(config,eval_dir,checkpoint_dir):
         x_mean = (x + stheta)/torch.sqrt(1.-beta)-torch.sqrt(stdt**2-eta**2*beta)*stdtm1*stheta
         x = x_mean + eta * stdtm1*torch.sqrt(beta)/stdt*dW/torch.sqrt(-dt)
         return x, x_mean
+    
     if config.mlmc.sampler.lower()=='ddim':
         samplerfun=DDIMSampler
     else:
         samplerfun=EulerMaruyama
+    
+    if config.mlmc.payoff.lower()=='activations':
+        payoff = lambda samples: activations_payoff(samples, inception_model=inception_model, 
+                                          inceptionv3=inceptionv3, config=config)
+    else:
+        payoff = lambda samples: samples #default to calculating mean image
+        
     def mlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False):
         """ 
         The path function for Euler-Maruyama diffusion, which calculates final samples \sim p(x_0).
@@ -165,28 +217,31 @@ def mlmc_test(config,eval_dir,checkpoint_dir):
             3d and 4d Tensors of various payoff sums and payoff-squared sums for Nl samples at level l/l-1
             Returns [sumPf,sumPf2,sumPf,sumPf2,0,0,0] is l=0.
          """
-        sqsums=torch.zeros((4,1))
-        sums=torch.zeros((3,*sampling_shape[-3:]))
         num_sampling_rounds = Nl // config.eval.batch_size + 1
         numrem=Nl % config.eval.batch_size
         for r in range(num_sampling_rounds):
             bs=numrem if r==num_sampling_rounds-1 else config.eval.batch_size
     
             Xf,Xc=mlmc_sample(bs,l,M) #should automatically use cuda
-            sumXf=torch.sum(Xf,axis=0).to('cpu') #sum over batch size
-            sumXf2=torch.sum(imagenorm(Xf)**2,axis=0).to('cpu').item()
+            fine_payoff=payoff(Xf)
+            coarse_payoff=payoff(Xc)
+            if r==0:
+                sums=torch.zeros((3,*fine_payoff.shape[1:])) #skip batch_size
+                sqsums=torch.zeros((4,*fine_payoff.shape[1:]))
+            sumXf=torch.sum(fine_payoff,axis=0).to('cpu') #sum over batch size
+            sumXf2=torch.sum(fine_payoff**2,axis=0).to('cpu').item()
             if l==min_l:
-                sqsums+=torch.tensor([sumXf2,sumXf2,0,0]).reshape(sqsums.shape)
+                sqsums+=torch.tensor([sumXf2,sumXf2,torch.zeros_like(sumXf2),torch.zeros_like(sumXf2)]).reshape(sqsums.shape)
                 sums+=torch.stack([sumXf,sumXf,torch.zeros_like(sumXf)])
             elif l<min_l:
                 raise ValueError("l must be at least min_l")
             else:
-                dX_l=Xf-Xc #Image difference
+                dX_l=fine_payoff-coarse_payoff #Image difference
                 sumdX_l=torch.sum(dX_l,axis=0).to('cpu') #sum over batch size
-                sumdX_l2=torch.sum(imagenorm(dX_l)**2,axis=0).to('cpu').item()
-                sumXc=torch.sum(Xc,axis=0).to('cpu')
-                sumXc2=torch.sum(imagenorm(Xc)**2,axis=0).to('cpu').item()
-                sumXcXf=torch.sum(Xc*Xf).to('cpu')
+                sumdX_l2=torch.sum(dX_l**2,axis=0).to('cpu').item()
+                sumXc=torch.sum(coarse_payoff,axis=0).to('cpu')
+                sumXc2=torch.sum(coarse_payoff**2,axis=0).to('cpu').item()
+                sumXcXf=torch.sum(coarse_payoff*fine_payoff).to('cpu')
                 sums+=torch.stack([sumdX_l,sumXf,sumXc])
                 sqsums+=torch.tensor([sumdX_l2,sumXf2,sumXc2,sumXcXf]).reshape(sqsums.shape)
         logging.info("sampling -- ckpt: %d, round: %d" % (ckpt, r))
@@ -235,22 +290,25 @@ def mlmc_test(config,eval_dir,checkpoint_dir):
         V=torch.zeros(mylen) #Initialise variance vector of each levels' variance
         N=torch.zeros(mylen) #Initialise num. samples vector of each levels' num. samples
         dN=N0*torch.ones(mylen) #Initialise additional samples for this iteration vector for each level
-        sqsums=torch.zeros((mylen,4,1)) #Initialise sqsums array of normed [dX^2,Xf^2,Xc^2,XcXf], each column is a level
         sqrt_h=torch.sqrt(M**(torch.arange(min_l,L+1,dtype=torch.float32)))
-        sums=torch.zeros((mylen,3,*sampling_shape[-3:])) #Initialise sums array of unnormed [dX,Xf,Xc], each column is a level
-    
+        it0_ind=False
         while (torch.sum(dN)>0): #Loop until no additional samples asked for
             mylen=L+1-min_l
             for i,l in enumerate(torch.arange(min_l,L+1)):
                 num=dN[i]
                 if num>0: #If asked for additional samples...
                     tempsums,tempsqsums=looper(int(num),l,M,min_l=min_l) #Call function which gives sums
+                    if not it0_ind:
+                        sums=torch.zeros((mylen,*tempsums.shape)) #Initialise sums array of unnormed [dX,Xf,Xc], each column is a level
+                        sqsums=torch.zeros((mylen,*tempsqsums.shape)) #Initialise sqsums array of normed [dX^2,Xf^2,Xc^2,XcXf], each column is a level
+                        it0_ind=True
                     sqsums[i,...]+=tempsqsums
                     sums[i,...]+=tempsums
                     
             N+=dN #Increment samples taken counter for each level
             Yl=imagenorm(sums[:,0])/N
-            V=torch.clip((sqsums[:,0].squeeze())/N-(Yl)**2,min=0) #Calculate variance based on updated samples
+            sumdims=tuple(range(1,len(sqsums[:,0].shape)))
+            V=torch.clip((torch.sum(sqsums[:,0],dim=sumdims).squeeze())/N-(Yl)**2,min=0) #Calculate variance based on updated samples
             
             ##Fix to deal with zero variance or mean by linear extrapolation
             # Yl[3:]=np.maximum(Yl[3:],Yl[2:L]*M**(-alpha))
@@ -388,86 +446,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir):
         return None
     
     Giles_plot(acc)
-    
-    # eval_dir = os.path.join(workdir, 'eval')
-    # tf.io.gfile.makedirs(eval_dir)
-    # for r in range(num_sampling_rounds):
-    #     logging.info("sampling -- ckpt: %d, round: %d" % (ckpt, r))
-    
-    #     # Directory to save samples. Different for each host to avoid writing conflicts
-    #     this_sample_dir = os.path.join(
-    #       eval_dir, f"ckpt_{ckpt}")
-    #     tf.io.gfile.makedirs(this_sample_dir)
-    #     samples = sample()
-    #     samples = np.clip(samples.permute(0, 2, 3, 1).cpu().numpy() * 255., 0, 255).astype(np.uint8)
-    #     samples = samples.reshape(
-    #       (-1, config.data.image_size, config.data.image_size, config.data.num_channels))
-    #     # Write samples to disk or Google Cloud Storage
-    #     with tf.io.gfile.GFile(
-    #         os.path.join(this_sample_dir, f"samples_{r}.npz"), "wb") as fout:
-    #       io_buffer = io.BytesIO()
-    #       np.savez_compressed(io_buffer, samples=samples)
-    #       fout.write(io_buffer.getvalue())
-          
-        # # Force garbage collection before calling TensorFlow code for Inception network
-        # gc.collect()
-        # latents = evaluation.run_inception_distributed(samples, inception_model,
-        #                                                inceptionv3=inceptionv3)
-        # # Force garbage collection again before returning to JAX code
-        # gc.collect()
-        # # Save latent represents of the Inception network to disk or Google Cloud Storage
-        # with tf.io.gfile.GFile(
-        #     os.path.join(this_sample_dir, f"statistics_{r}.npz"), "wb") as fout:
-        #   io_buffer = io.BytesIO()
-        #   np.savez_compressed(
-        #     io_buffer, pool_3=latents["pool_3"], logits=latents["logits"])
-        #   fout.write(io_buffer.getvalue())
-    
-    # Compute inception scores, FIDs and KIDs.
-    # Load all statistics that have been previously computed and saved for each host
-    # all_logits = []
-    # all_pools = []
-    # this_sample_dir = os.path.join(eval_dir, f"ckpt_{ckpt}")
-    # stats = tf.io.gfile.glob(os.path.join(this_sample_dir, "statistics_*.npz"))
-    # for stat_file in stats:
-    #   with tf.io.gfile.GFile(stat_file, "rb") as fin:
-    #     stat = np.load(fin)
-    #     if not inceptionv3:
-    #       all_logits.append(stat["logits"])
-    #     all_pools.append(stat["pool_3"])
-    
-    # if not inceptionv3:
-    #   all_logits = np.concatenate(all_logits, axis=0)[:config.eval.num_samples]
-    # all_pools = np.concatenate(all_pools, axis=0)[:config.eval.num_samples]
-    
-    # # Load pre-computed dataset statistics.
-    # data_stats = evaluation.load_dataset_stats(config)
-    # data_pools = data_stats["pool_3"]
-    
-    # # Compute FID/KID/IS on all samples together.
-    # if not inceptionv3:
-    #   inception_score = tfgan.eval.classifier_score_from_logits(all_logits)
-    # else:
-    #   inception_score = -1
-    
-    # fid = tfgan.eval.frechet_classifier_distance_from_activations(
-    #   data_pools, all_pools)
-    # # Hack to get tfgan KID work for eager execution.
-    # tf_data_pools = tf.convert_to_tensor(data_pools)
-    # tf_all_pools = tf.convert_to_tensor(all_pools)
-    # kid = tfgan.eval.kernel_classifier_distance_from_activations(
-    #   tf_data_pools, tf_all_pools).numpy()
-    # del tf_data_pools, tf_all_pools
-    
-    # logging.info(
-    #   "ckpt-%d --- inception_score: %.6e, FID: %.6e, KID: %.6e" % (
-    #     ckpt, inception_score, fid, kid))
-    
-    # with tf.io.gfile.GFile(os.path.join(eval_dir, f"report_{ckpt}.npz"),
-    #                        "wb") as f:
-    #   io_buffer = io.BytesIO()
-    #   np.savez_compressed(io_buffer, IS=inception_score, fid=fid, kid=kid)
-    #   f.write(io_buffer.getvalue())
+
 
    
 
