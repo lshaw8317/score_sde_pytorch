@@ -1,5 +1,6 @@
 import ml_collections
 import torch
+import numpy as np
 
 
 def get_default_configs():
@@ -30,7 +31,7 @@ def get_default_configs():
   config.eval = evaluate = ml_collections.ConfigDict()
   evaluate.begin_ckpt = 9
   evaluate.end_ckpt = 26
-  evaluate.batch_size = 1024
+  evaluate.batch_size = 1600
   evaluate.enable_sampling = False
   evaluate.num_samples = 50000
   evaluate.enable_loss = True
@@ -50,7 +51,7 @@ def get_default_configs():
   config.model = model = ml_collections.ConfigDict()
   model.sigma_min = 0.01
   model.sigma_max = 50
-  model.num_scales = 2000
+  model.num_scales = 2**11
   model.beta_min = 0.1
   model.beta_max = 20.
   model.dropout = 0.1
@@ -68,13 +69,13 @@ def get_default_configs():
 
   #MLMC
   config.mlmc = mlmc = ml_collections.ConfigDict()
-  mlmc.acc=[.5,.1,.05,.01,.005,.001]
-  mlmc.N0=10**2
+  mlmc.N0=1000
   mlmc.min_l=3
-  mlmc.Nsamples=10**5
+  mlmc.Nsamples=10**3 #samples to use to estimate variance and mean of payoff
   mlmc.M=2
-  mlmc.Lmax=10
-  mlmc.sampler='EM'
+  mlmc.Lmax=int(np.log(model.num_scales)/np.log(mlmc.M))
+  mlmc.DDIM_eta=0
+  
   config.seed = 42
   config.device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
 
