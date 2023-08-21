@@ -1,4 +1,3 @@
-# -*- coding:A utf-8 -*
 from models import utils as mutils
 import os
 import gc
@@ -238,17 +237,24 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
                 sqsums+=torch.stack([sumdX_l2,sumXf2,sumXc2,sumXcXf])
     
         # Directory to save samples. Repeatedly overwrites, just to save some example samples for debugging
-        this_sample_dir = os.path.join(eval_dir, f"level_{l}")
-        if not tf.io.gfile.exists(this_sample_dir):
-            tf.io.gfile.makedirs(this_sample_dir)
-        samples=np.clip(Xf.permute(0, 2, 3, 1).cpu().numpy() * 255., 0, 255).astype(np.uint8)
-        samples = samples.reshape(
-          (-1, config.data.image_size, config.data.image_size, config.data.num_channels))
-        # Write samples to disk or Google Cloud Storage
-        with tf.io.gfile.GFile(os.path.join(this_sample_dir, "samples.npz"), "wb") as fout:
-          io_buffer = io.BytesIO()
-          np.savez_compressed(io_buffer, samples=samples)
-          fout.write(io_buffer.getvalue())
+        if l>min_l:
+            this_sample_dir = os.path.join(eval_dir, f"level_{l}")
+            if not tf.io.gfile.exists(this_sample_dir):
+                tf.io.gfile.makedirs(this_sample_dir)
+            samples_f=np.clip(Xf.permute(0, 2, 3, 1).cpu().numpy() * 255., 0, 255).astype(np.uint8)
+            samples_f = samples_f.reshape(
+                (-1, config.data.image_size, config.data.image_size, config.data.num_channels))
+            samples_c=np.clip(Xc.permute(0, 2, 3, 1).cpu().numpy() * 255., 0, 255).astype(np.uint8)
+            samples_c = samples_c.reshape(
+                (-1, config.data.image_size, config.data.image_size, config.data.num_channels))
+            with tf.io.gfile.GFile(os.path.join(this_sample_dir, "samples_f.npz"), "wb") as fout:
+                io_buffer = io.BytesIO()
+                np.savez_compressed(io_buffer, samplesf=samples_f)
+                fout.write(io_buffer.getvalue())
+            with tf.io.gfile.GFile(os.path.join(this_sample_dir, "samples_c.npz"), "wb") as fout:
+                io_buffer = io.BytesIO()
+                np.savez_compressed(io_buffer, samplesc=samples_c)
+                fout.write(io_buffer.getvalue())
                 
         return sums,sqsums 
     
@@ -364,53 +370,61 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
         sums=torch.zeros((Lmax+1-min_l,*sums.shape[1:]))
         sqsums=torch.zeros((Lmax+1-min_l,*sqsums.shape[1:]))
 
-        print(f'Proceeding to calculate variance and means with {Nsamples} estimator samples')
-        for i,l in enumerate(range(min_l,Lmax+1)):
-            print(f'l={l}')
-            sums[i],sqsums[i] = looper(Nsamples,l,M,min_l=min_l)
-
-        sumdims=tuple(range(1,len(sqsums[:,0].shape))) #sqsums is output of payoff element-wise squared, so reduce     
-        means_p=imagenorm(sums[:,1])/Nsamples
-        s=sqsums[:,0].shape
-        V_p=(torch.sum(sqsums[:,1],dim=sumdims).squeeze()/np.prod(s[1:]))/Nsamples-means_p**2
-        means_dp=imagenorm(sums[:,0])/Nsamples
-        V_dp=(torch.sum(sqsums[:,0],dim=sumdims).squeeze()/np.prod(s[1:]))/Nsamples-means_dp**2  
-        
-        # Directory to save means and norms
+        # Directory to save means and norms                                                                                               
         this_sample_dir = os.path.join(eval_dir, f"VarMean_M_{M}_Nsamples_{Nsamples}")
         if not tf.io.gfile.exists(this_sample_dir):
-            tf.io.gfile.makedirs(this_sample_dir)        
-        
-        # Write samples to disk or Google Cloud Storage
-        with tf.io.gfile.GFile(os.path.join(this_sample_dir, "averages.pt"), "wb") as fout:
-            io_buffer = io.BytesIO()
-            torch.save(sums/Nsamples,io_buffer)
-            fout.write(io_buffer.getvalue())
-        with tf.io.gfile.GFile(os.path.join(this_sample_dir, "sqaverages.pt"), "wb") as fout:
-            io_buffer = io.BytesIO()
-            torch.save(sqsums/Nsamples,io_buffer)
-            fout.write(io_buffer.getvalue())
-        with tf.io.gfile.GFile(os.path.join(this_sample_dir, "Ls.pt"), "wb") as fout:
-            io_buffer = io.BytesIO()
-            torch.save(torch.arange(min_l,Lmax+1,dtype=torch.int32),io_buffer)
-            fout.write(io_buffer.getvalue())
-            
-        #Estimate orders of weak (alpha from means) and strong (beta from variance) convergence using LR
-        X=np.ones((Lmax-min_l,2))
-        X[:,0]=np.arange(min_l+1,Lmax+1)
-        a = np.linalg.lstsq(X,np.log(means_dp[1:]),rcond=None)[0]
-        alpha = -a[0]/np.log(M)
-        b = np.linalg.lstsq(X,np.log(V_dp[1:]),rcond=None)[0]
-        beta = -b[0]/np.log(M) 
+            tf.io.gfile.makedirs(this_sample_dir)
+            print(f'Proceeding to calculate variance and means with {Nsamples} estimator samples')
+            for i,l in enumerate(range(min_l,Lmax+1)):
+                print(f'l={l}')
+                sums[i],sqsums[i] = looper(Nsamples,l,M,min_l=min_l)
 
-        print(f'Estimated alpha={alpha}\n Estimated beta={beta}\n')
-        with open(os.path.join(this_sample_dir, "info_text.txt"),'a') as f:
-            extrastr="continuous" if config.training.continuous else ''
-            f.write(f'Dataset:{config.data.dataset}. Model: {config.model.name}, {extrastr}, {config.training.sde}.\n')
-            f.write(f'Payoff:{payoff_arg}\n')
-            f.write(f'Sampler:{sampler}. DDIM_eta={eta}. Sampling eps={sampling_eps}.\n')
-            f.write(f'MLMC params: N0={N0}, Lmax={Lmax}, Lmin={min_l}, Nsamples={Nsamples}, M={M}.\n')
-            f.write(f'Estimated alpha={alpha}\n Estimated beta={beta}')
+            sumdims=tuple(range(1,len(sqsums[:,0].shape))) #sqsums is output of payoff element-wise squared, so reduce     
+            means_p=imagenorm(sums[:,1])/Nsamples
+            s=sqsums[:,0].shape
+            V_p=(torch.sum(sqsums[:,1],dim=sumdims).squeeze()/np.prod(s[1:]))/Nsamples-means_p**2
+            means_dp=imagenorm(sums[:,0])/Nsamples
+            V_dp=(torch.sum(sqsums[:,0],dim=sumdims).squeeze()/np.prod(s[1:]))/Nsamples-means_dp**2  
+        
+            # Write samples to disk or Google Cloud Storage
+            with tf.io.gfile.GFile(os.path.join(this_sample_dir, "averages.pt"), "wb") as fout:
+                io_buffer = io.BytesIO()
+                torch.save(sums/Nsamples,io_buffer)
+                fout.write(io_buffer.getvalue())
+            with tf.io.gfile.GFile(os.path.join(this_sample_dir, "sqaverages.pt"), "wb") as fout:
+                io_buffer = io.BytesIO()
+                torch.save(sqsums/Nsamples,io_buffer)
+                fout.write(io_buffer.getvalue())
+            with tf.io.gfile.GFile(os.path.join(this_sample_dir, "Ls.pt"), "wb") as fout:
+                io_buffer = io.BytesIO()
+                torch.save(torch.arange(min_l,Lmax+1,dtype=torch.int32),io_buffer)
+                fout.write(io_buffer.getvalue())
+            
+            #Estimate orders of weak (alpha from means) and strong (beta from variance) convergence using LR
+            X=np.ones((Lmax-min_l,2))
+            X[:,0]=np.arange(min_l+1,Lmax+1)
+            a = np.linalg.lstsq(X,np.log(means_dp[1:]),rcond=None)[0]
+            alpha = -a[0]/np.log(M)
+            b = np.linalg.lstsq(X,np.log(V_dp[1:]),rcond=None)[0]
+            beta = -b[0]/np.log(M) 
+
+            print(f'Estimated alpha={alpha}\n Estimated beta={beta}\n')
+            with open(os.path.join(this_sample_dir, "info_text.txt"),'wb') as f:
+                extrastr="continuous" if config.training.continuous else ''
+                f.write(f'Dataset:{config.data.dataset}. Model: {config.model.name}, {extrastr}, {config.training.sde}.\n')
+                f.write(f'Payoff:{payoff_arg}\n')
+                f.write(f'Sampler:{sampler}. DDIM_eta={eta}. Sampling eps={sampling_eps}.\n')
+                f.write(f'MLMC params: N0={N0}, Lmax={Lmax}, Lmin={min_l}, Nsamples={Nsamples}, M={M}.\n')
+                f.write(f'Estimated alpha={alpha}\n Estimated beta={beta}')
+            with tf.io.gfile.GFile(os.path.join(this_sample_dir, "alphabeta.pt"), "wb") as fout:
+                io_buffer = io.BytesIO()
+                torch.save(torch.tensor([alpha,beta]),io_buffer)
+                fout.write(io_buffer.getvalue())
+                
+        with open(os.path.join(this_sample_dir, "alphabeta.pt"),'rb') as f:
+            temp=torch.load(f)
+            alpha=temp[0].item()
+            beta=temp[1].item()
         
         #Do the calculations and simulations for num levels and complexity plot
         for i in range(len(acc)):
@@ -479,13 +493,15 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
         
     def MC(Nl):
         this_sample_dir = os.path.join(eval_dir,'MCsamples')
-        l=config.mlmc.Lmax
+        if not tf.io.gfile.exists(this_sample_dir):
+            tf.io.gfile.makedirs(this_sample_dir)
+        l=8
         M=config.mlmc.M
-        with open(os.path.join(this_sample_dir, "info_text.txt"),'a') as f:
+        with open(os.path.join(this_sample_dir, "info_text.txt"),'w') as f:
             extrastr="continuous" if config.training.continuous else ''
-            f.write(f'Dataset:{config.data.dataset}. Model: {config.model.name}, {extrastr}, {config.training.sde}.')
-            f.write(f'Sampler:{sampler}. DDIM_eta={eta}. Sampling eps={sampling_eps}.')
-            f.write(f'MC params:Lmax={Lmax}, Nsamples={Nl}, M={M}.')
+            f.write(f'Dataset:{config.data.dataset}. Model: {config.model.name}, {extrastr}, {config.training.sde}. \n')
+            f.write(f'Sampler:{sampler}. DDIM_eta={eta}. Sampling eps={sampling_eps}.\n')
+            f.write(f'MC params:L={l}, Nsamples={Nl}, M={M}.')
         num_sampling_rounds = Nl // config.eval.batch_size + 1
         numrem=Nl % config.eval.batch_size
         for r in range(num_sampling_rounds):
@@ -504,4 +520,4 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
         Giles_plot(acc)
     else: #MC
         print('Doing MC estimates.')
-        MC(1e7)
+        MC(int(1e6))
