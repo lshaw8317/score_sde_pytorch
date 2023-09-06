@@ -364,10 +364,6 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
         N0=config.mlmc.N0
         Lmax=config.mlmc.Lmax
         Nsamples=config.mlmc.Nsamples
-        
-        #Initialise complexity lists
-        cost_mlmc=[]
-        cost_mc=[]
         min_l=config.mlmc.min_l
 
         #Variance and mean samples
@@ -470,7 +466,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
                 torch.save(N,io_buffer)
                 fout.write(io_buffer.getvalue())
             # Write samples to disk or Google Cloud Storage        
-            with open(os.path.join(this_sample_dir, "costs.pt"), "wb") as fout:
+            with open(os.path.join(this_sample_dir, "costs.npz"), "wb") as fout:
                 np.savez_compressed(fout,costmlmc=np.array(cost_mlmc),costmc=np.array(cost_mc))
 
             meanimg=torch.sum(sums[:,0]/dividerN[:,0,...],axis=0)#cut off one dummy axis
