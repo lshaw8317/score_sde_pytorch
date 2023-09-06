@@ -370,17 +370,17 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
 
         #Variance and mean samples
         sums,sqsums,_=mlmc(1e5,M,N0=1,min_l=0) #dummy run to get sum shapes 
-        sums=torch.zeros((Lmax+1-min_l,*sums.shape[1:]))
-        sqsums=torch.zeros((Lmax+1-min_l,*sqsums.shape[1:]))
 
         # Directory to save means and norms                                                                                               
         this_sample_dir = os.path.join(eval_dir, f"VarMean_M_{M}_Nsamples_{Nsamples}")
         if not tf.io.gfile.exists(this_sample_dir):
             tf.io.gfile.makedirs(this_sample_dir)
             print(f'Proceeding to calculate variance and means with {Nsamples} estimator samples')
-            for i,l in enumerate(range(min_l,Lmax+1)):
+            sums=torch.zeros((Lmax,*sums.shape[1:]))
+            sqsums=torch.zeros((Lmax,*sqsums.shape[1:]))
+            for i,l in enumerate(range(1,Lmax+1)):
                 print(f'l={l}')
-                sums[i],sqsums[i] = looper(Nsamples,l,M,min_l=min_l)
+                sums[i],sqsums[i] = looper(Nsamples,l,M,min_l=1)
 
             sumdims=tuple(range(1,len(sqsums[:,0].shape))) #sqsums is output of payoff element-wise squared, so reduce     
             means_p=imagenorm(sums[:,1])/Nsamples
@@ -400,12 +400,12 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
                 fout.write(io_buffer.getvalue())
             with tf.io.gfile.GFile(os.path.join(this_sample_dir, "Ls.pt"), "wb") as fout:
                 io_buffer = io.BytesIO()
-                torch.save(torch.arange(min_l,Lmax+1,dtype=torch.int32),io_buffer)
+                torch.save(torch.arange(1,Lmax+1,dtype=torch.int32),io_buffer)
                 fout.write(io_buffer.getvalue())
             
             #Estimate orders of weak (alpha from means) and strong (beta from variance) convergence using LR
-            X=np.ones((Lmax-min_l,2))
-            X[:,0]=np.arange(min_l+1,Lmax+1)
+            X=np.ones((Lmax-1,2))
+            X[:,0]=np.arange(2,Lmax+1)
             a = np.linalg.lstsq(X,np.log(means_dp[1:]),rcond=None)[0]
             alpha = -a[0]/np.log(M)
             b = np.linalg.lstsq(X,np.log(V_dp[1:]),rcond=None)[0]
@@ -418,7 +418,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
                 f.write(f'Payoff:{payoff_arg}\n')
                 f.write(f'Sampler:{sampler}. DDIM_eta={eta}. Sampling eps={sampling_eps}.\n')
                 f.write(f'MLMC params: N0={N0}, Lmax={Lmax}, Lmin={min_l}, Nsamples={Nsamples}, M={M}, accsplit={accsplit}.\n')
-                f.write(f'Estimated alpha={alpha}\n Estimated beta={beta}')
+                f.write(f'Estimated alpha={alpha}\n Estimated beta={beta}. Plotting Lmin=1.')
             with tf.io.gfile.GFile(os.path.join(this_sample_dir, "alphabeta.pt"), "wb") as fout:
                 io_buffer = io.BytesIO()
                 torch.save(torch.tensor([alpha,beta]),io_buffer)
@@ -430,6 +430,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
             beta=temp[1].item()
         
         #Do the calculations and simulations for num levels and complexity plot
+        sums=torch.zeros((Lmax+1-min_l,*sums.shape[1:]))
+        sqsums=torch.zeros((Lmax+1-min_l,*sqsums.shape[1:]))
         for i in range(len(acc)):
             e=acc[i]
             print(f'Performing mlmc for accuracy={e}')
