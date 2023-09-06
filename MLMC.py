@@ -80,7 +80,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
     # Use inceptionV3 for images with resolution higher than 256.
     inceptionv3 = config.data.image_size >= 256
     inception_model = evaluation.get_inception_model(inceptionv3=inceptionv3)
-    
+    accsplit=np.sqrt(.5) #default even bias-variance split
     if payoff_arg=='activations':
         print('activations payoff selected for MLMC. Altering config file defaults correspondingly.')
         payoff = lambda samples: activations_payoff(samples, inception_model=inception_model, 
@@ -88,10 +88,13 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
         config.mlmc.min_l=5
         config.eval.batch_size=128
         config.mlmc.N0=100
+        accsplit=np.sqrt(0.01) #since beta<gamma, let error in bias be large and force error onto variance 
     elif payoff_arg=='variance':
         print('Pixel-wise variance payoff selected for MLMC. Altering config file defaults correspondingly.')
+        config.mlmc.N0=100
         payoff = lambda samples: samples**2
     elif payoff_arg=='images':
+        config.mlmc.N0=100
         print('Setting payoff function to images for MLMC.')
         payoff = lambda samples: samples #default to calculating mean image
     else:
@@ -259,7 +262,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
         return sums,sqsums 
     
     ##MLMC function
-    def mlmc(accuracy,M=2,N0=10**2,alpha_0=-1,beta_0=-1,min_l=0,Lmax=11):
+    def mlmc(accuracy,M=2,N0=10**2,alpha_0=-1,beta_0=-1,min_l=0,Lmax=11,accsplit=accsplit):
         """
         Runs MLMC algorithm which returns an array of sums at each level.
         ________________
@@ -275,7 +278,6 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
             sums(np.array) : sums of payoff diffs at each level and sum of payoffs at fine level, each column is a level
             N(np.array of ints) : final number of samples at each level
         """
-    
         #Orders of convergence
         alpha=max(0,alpha_0)
         beta=max(0,beta_0)
@@ -286,7 +288,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
         V=torch.zeros(mylen) #Initialise variance vector of each levels' variance
         N=torch.zeros(mylen) #Initialise num. samples vector of each levels' num. samples
         dN=N0*torch.ones(mylen) #Initialise additional samples for this iteration vector for each level
-        sqrt_cost=torch.sqrt(2*M**(torch.arange(min_l,L+1,dtype=torch.float32)))
+        sqrt_cost=torch.sqrt(M**torch.arange(min_l,L+1.)+torch.hstack((torch.tensor([0.]),M**torch.arange(min_l,1.*L)))))
         it0_ind=False
         while (torch.sum(dN)>0): #Loop until no additional samples asked for
             mylen=L+1-min_l
@@ -328,11 +330,11 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
                 beta=beta_
                 
             sqrt_V=torch.sqrt(V)
-            Nl_new=torch.ceil((2*accuracy**-2)*torch.sum(sqrt_V*sqrt_cost)*(sqrt_V/sqrt_cost)) #Estimate optimal number of samples/level
+            Nl_new=torch.ceil(((accsplit*accuracy)**-2)*torch.sum(sqrt_V*sqrt_cost)*(sqrt_V/sqrt_cost)) #Estimate optimal number of samples/level
             dN=torch.clip(Nl_new-N,min=0) #Number of additional samples
             print(f'Asking for {dN} new samples for l=[{min_l,L}]')
             if torch.sum(dN > 0.01*N).item() == 0: #Almost converged
-                if max(Yl[-2]/(M**alpha),Yl[-1])>(M**alpha-1)*accuracy*np.sqrt(0.5):
+                if max(Yl[-2]/(M**alpha),Yl[-1])>(M**alpha-1)*accuracy*np.sqrt(1-accsplit**2):
                     L+=1
                     print(f'Increased L to {L}')
                     if (L>Lmax):
@@ -341,8 +343,9 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
                     #Add extra entries for the new level and estimate sums with N0 samples 
                     V=torch.cat((V,V[-1]*M**(-beta)*torch.ones(1)), dim=0)
                     sqrt_V=torch.sqrt(V)
-                    sqrt_cost=torch.cat((sqrt_cost,torch.tensor([2**(.5)*M**(L/2)])),dim=0)
-                    Nl_new=torch.ceil((2*accuracy**-2)*torch.sum(sqrt_V*sqrt_cost)*(sqrt_V/sqrt_cost)) #Estimate optimal number of sample
+                    newcost=torch.sqrt(torch.tensor([M**L+M**(L-1)]))
+                    sqrt_cost=torch.cat((sqrt_cost,newcost,dim=0)
+                    Nl_new=torch.ceil(((accsplit*accuracy)**-2)*torch.sum(sqrt_V*sqrt_cost)*(sqrt_V/sqrt_cost)) #Estimate optimal number of sample
                     N=torch.cat((N,torch.tensor([0])),dim=0)
                     dN=torch.clip(Nl_new-N,min=0) #Number of additional samples
                     print(f'With new L, estimate of {dN} new samples for l=[{min_l,L}]')
@@ -409,12 +412,12 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
             beta = -b[0]/np.log(M) 
 
             print(f'Estimated alpha={alpha}\n Estimated beta={beta}\n')
-            with open(os.path.join(this_sample_dir, "info_text.txt"),'wb') as f:
+            with open(os.path.join(this_sample_dir, "info_text.txt"),'w') as f:
                 extrastr="continuous" if config.training.continuous else ''
                 f.write(f'Dataset:{config.data.dataset}. Model: {config.model.name}, {extrastr}, {config.training.sde}.\n')
                 f.write(f'Payoff:{payoff_arg}\n')
                 f.write(f'Sampler:{sampler}. DDIM_eta={eta}. Sampling eps={sampling_eps}.\n')
-                f.write(f'MLMC params: N0={N0}, Lmax={Lmax}, Lmin={min_l}, Nsamples={Nsamples}, M={M}.\n')
+                f.write(f'MLMC params: N0={N0}, Lmax={Lmax}, Lmin={min_l}, Nsamples={Nsamples}, M={M}, accsplit={accsplit}.\n')
                 f.write(f'Estimated alpha={alpha}\n Estimated beta={beta}')
             with tf.io.gfile.GFile(os.path.join(this_sample_dir, "alphabeta.pt"), "wb") as fout:
                 io_buffer = io.BytesIO()
@@ -439,7 +442,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
 
             #e^2*cost
             cost_mlmc+=[torch.sum(N*(M**np.arange(min_l,L+1)+np.hstack((0,M**np.arange(min_l,L)))))*e**2] #cost is number of NFE
-            cost_mc+=[2*torch.sum(V_p*(M**np.arange(min_l,L+1)))]
+            cost_mc+=[V_p[-1]*(M**L)/accsplit**2]
             
             # Directory to save means, norms and N
             dividerN=N.clone() #add axes to N to broadcast correctly on division
@@ -464,6 +467,9 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
                 io_buffer = io.BytesIO()
                 torch.save(N,io_buffer)
                 fout.write(io_buffer.getvalue())
+            # Write samples to disk or Google Cloud Storage        
+            with open(os.path.join(this_sample_dir, "costs.pt"), "wb") as fout:
+                np.savez_compressed(fout,costmlmc=np.array(cost_mlmc),costmc=np.array(cost_mc))
 
             meanimg=torch.sum(sums[:,0]/dividerN[:,0,...],axis=0)#cut off one dummy axis
             if payoff_arg=='images' or payoff_arg=='variance':
