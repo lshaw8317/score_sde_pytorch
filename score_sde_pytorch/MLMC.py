@@ -443,8 +443,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
             V_p=(torch.sum(sqsums[:,0],dim=sumdims).squeeze()/np.prod(s[1:]))/N-means_p**2
 
             #e^2*cost
-            cost_mlmc+=[torch.sum(N*(M**np.arange(min_l,L+1)+np.hstack((0,M**np.arange(min_l,L)))))*e**2] #cost is number of NFE
-            cost_mc+=[V_p[-1]*(M**L)/accsplit**2]
+            cost_mlmc=torch.sum(N*(M**np.arange(min_l,L+1)+np.hstack((0,M**np.arange(min_l,L)))))*e**2 #cost is number of NFE
+            cost_mc=V_p[-1]*(M**L)/accsplit**2
             
             # Directory to save means, norms and N
             dividerN=N.clone() #add axes to N to broadcast correctly on division
@@ -484,8 +484,6 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
        
         return None
 
-    actspayoff=lambda samples: activations_payoff(samples, inception_model=inception_model,
-                                          inceptionv3=inceptionv3, config=config)
     def MC_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False):
         with torch.no_grad():
             xf = sde.prior_sampling((bs,*sampling_shape[-3:])).to(config.device)
