@@ -84,16 +84,18 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
         print('activations payoff selected for MLMC. Altering config file defaults correspondingly.')
         payoff = lambda samples: activations_payoff(samples, inception_model=inception_model, 
                                           inceptionv3=inceptionv3, config=config)
-        config.mlmc.min_l=5
+        config.mlmc.min_l=3
         config.eval.batch_size=128
         config.mlmc.N0=100
         accsplit=np.sqrt(0.01) #since beta<gamma, let error in bias be large and force error onto variance 
     elif payoff_arg=='variance':
         print('Pixel-wise variance payoff selected for MLMC. Altering config file defaults correspondingly.')
-        config.mlmc.N0=100
+        config.mlmc.N0=10
+        config.mlmc.min_l=1
         payoff = lambda samples: samples**2
     elif payoff_arg=='images':
-        config.mlmc.N0=100
+        config.mlmc.N0=10
+        config.mlmc.min_l=1
         print('Setting payoff function to images for MLMC.')
         payoff = lambda samples: samples #default to calculating mean image
     else:
