@@ -345,7 +345,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
                     #Add extra entries for the new level and estimate sums with N0 samples 
                     V=torch.cat((V,V[-1]*M**(-beta)*torch.ones(1)), dim=0)
                     sqrt_V=torch.sqrt(V)
-                    newcost=torch.sqrt(torch.tensor([M**L+M**(L-1)]))
+                    newcost=torch.sqrt(torch.tensor([M**L+M**(L-1.)]))
                     sqrt_cost=torch.cat((sqrt_cost,newcost),dim=0)
                     Nl_new=torch.ceil(((accsplit*accuracy)**-2)*torch.sum(sqrt_V*sqrt_cost)*(sqrt_V/sqrt_cost)) #Estimate optimal number of sample
                     N=torch.cat((N,torch.tensor([0])),dim=0)
