@@ -92,10 +92,12 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
         print('Pixel-wise variance payoff selected for MLMC. Altering config file defaults correspondingly.')
         config.mlmc.N0=10
         config.mlmc.min_l=1
+        config.eval.batch_size=2000
         payoff = lambda samples: samples**2
     elif payoff_arg=='images':
         config.mlmc.N0=10
         config.mlmc.min_l=1
+        config.eval.batch_size=2000
         print('Setting payoff function to images for MLMC.')
         payoff = lambda samples: samples #default to calculating mean image
     else:
