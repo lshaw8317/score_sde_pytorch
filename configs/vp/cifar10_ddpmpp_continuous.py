@@ -63,6 +63,4 @@ def get_config():
   model.fourier_scale = 16
   model.conv_size = 3
   
-  config.mlmc.DDIM_eta=.5
-  config.mlmc.sampler='DDIM'
   return config
