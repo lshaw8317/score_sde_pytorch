@@ -312,8 +312,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
                 ,min=0) #Calculate variance based on updated samples
             
             ##Fix to deal with zero variance or mean by linear extrapolation
-            #Yl[2:]=torch.maximum(Yl[2:],.5*Yl[1:-1]*M**(-alpha))
-            #V[2:]=torch.maximum(V[2:],.5*V[1:-1]*M**(-beta))
+            Yl[2:]=torch.maximum(Yl[2:],Yl[1:-1]*M**(-alpha))
+            V[2:]=torch.maximum(V[2:],V[1:-1]*M**(-beta))
             
             #Estimate order of weak convergence using LR
             #Yl=(M^alpha-1)khl^alpha=(M^alpha-1)k(TM^-l)^alpha=((M^alpha-1)kT^alpha)M^(-l*alpha)
