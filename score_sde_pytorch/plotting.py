@@ -41,7 +41,7 @@ cost_mlmc=np.zeros(len(files))
 cost_mc=np.zeros(len(files))
 plt.rc('axes', titlesize=4)     # fontsize of the axes title
 larr=np.array([int(f.split('_')[-1]) for f in os.listdir(expdir) if f.startswith('level')])
-Lmin = 5 if switcher=='acts' else 3
+Lmin = 5 if switcher=='acts' else 1
 Lmax = 11
 
 if switcher=='means':
@@ -190,9 +190,9 @@ sortcost_mlmc=cost_mlmc[indices]
 sortacc=acc[indices]
 
 axis_list[3].loglog(sortacc,sortcost_mc,'k:',marker=(8,2,0),markersize=markersize,
-             markerfacecolor="None",markeredgecolor='k', markeredgewidth=1,label='Std. MC')
+             markerfacecolor="None",markeredgecolor='k', markeredgewidth=1,label='Std. MC',base=2)
 axis_list[3].loglog(sortacc,sortcost_mlmc,'k-',marker=(8,2,0),markersize=markersize,
-             markerfacecolor="None",markeredgecolor='k', markeredgewidth=1,label='Std. MLMC')
+             markerfacecolor="None",markeredgecolor='k', markeredgewidth=1,label='Std. MLMC',base=2)
 axis_list[3].set_xlabel('Acc. $a$')
 axis_list[3].set_ylabel('$a^{2}$cost')
 axis_list[3].legend(frameon=True,framealpha=0.6)

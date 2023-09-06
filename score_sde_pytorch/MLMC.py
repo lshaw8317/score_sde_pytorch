@@ -90,14 +90,14 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
         accsplit=np.sqrt(0.01) #since beta<gamma, let error in bias be large and force error onto variance 
     elif payoff_arg=='variance':
         print('Pixel-wise variance payoff selected for MLMC. Altering config file defaults correspondingly.')
-        config.mlmc.N0=10
-        config.mlmc.min_l=1
-        config.eval.batch_size=2000
+        config.mlmc.N0=1000
+        config.mlmc.min_l=3
+        config.eval.batch_size=1800
         payoff = lambda samples: samples**2
     elif payoff_arg=='images':
-        config.mlmc.N0=10
-        config.mlmc.min_l=1
-        config.eval.batch_size=2000
+        config.mlmc.N0=1000
+        config.mlmc.min_l=3
+        config.eval.batch_size=1800
         print('Setting payoff function to images for MLMC.')
         payoff = lambda samples: samples #default to calculating mean image
     else:
@@ -316,8 +316,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
                 ,min=0) #Calculate variance based on updated samples
             
             ##Fix to deal with zero variance or mean by linear extrapolation
-            Yl[2:]=torch.maximum(Yl[2:],Yl[1:-1]*M**(-alpha))
-            V[2:]=torch.maximum(V[2:],V[1:-1]*M**(-beta))
+            Yl[2:]=torch.maximum(Yl[2:],.5*Yl[1:-1]*M**(-alpha))
+            V[2:]=torch.maximum(V[2:],.5*V[1:-1]*M**(-beta))
             
             #Estimate order of weak convergence using LR
             #Yl=(M^alpha-1)khl^alpha=(M^alpha-1)k(TM^-l)^alpha=((M^alpha-1)kT^alpha)M^(-l*alpha)
@@ -365,7 +365,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
         M=config.mlmc.M
         N0=config.mlmc.N0
         Lmax=config.mlmc.Lmax
-        Nsamples=config.mlmc.Nsamples
+        Nsamples=10000#config.mlmc.Nsamples
         min_l=config.mlmc.min_l
 
         #Variance and mean samples
