@@ -21,7 +21,12 @@ import six
 import tensorflow as tf
 import tensorflow_gan as tfgan
 import tensorflow_hub as tfhub
-
+#Fix to limit memory growth when calculating inception scores
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+  for gpu in gpus:
+      tf.config.experimental.set_memory_growth(gpu, True)
+    
 INCEPTION_TFHUB = 'https://tfhub.dev/tensorflow/tfgan/eval/inception/1'
 INCEPTION_OUTPUT = 'logits'
 INCEPTION_FINAL_POOL = 'pool_3'
@@ -85,26 +90,22 @@ def classifier_fn_from_tfhub(output_fields, inception_model,
 
   return _classifier_fn
 
-
-@tf.function
 def run_inception_jit(inputs,
                       inception_model,
                       num_batches=1,
                       inceptionv3=False):
   """Running the inception network. Assuming input is within [0, 255]."""
+  
   if not inceptionv3:
     inputs = (tf.cast(inputs, tf.float32) - 127.5) / 127.5
   else:
     inputs = tf.cast(inputs, tf.float32) / 255.
-
   return tfgan.eval.run_classifier_fn(
     inputs,
     num_batches=num_batches,
     classifier_fn=classifier_fn_from_tfhub(None, inception_model),
     dtypes=_DEFAULT_DTYPES)
 
-
-@tf.function
 def run_inception_distributed(input_tensor,
                               inception_model,
                               num_batches=1,
@@ -122,7 +123,12 @@ def run_inception_distributed(input_tensor,
       logits of the inception network respectively.
   """
   num_tpus = jax.local_device_count()
-  input_tensors = tf.split(input_tensor, num_tpus, axis=0)
+  splitter=(input_tensor.shape[0]//num_tpus)*np.ones((num_tpus,),dtype=np.int32)
+  rem=input_tensor.shape[0]%num_tpus
+  if rem!=0:
+    splitter[:rem]+=np.ones(rem,dtype=np.int32)
+  splitter=tf.convert_to_tensor(splitter)
+  input_tensors = tf.split(input_tensor, splitter, axis=0)
   pool3 = []
   logits = [] if not inceptionv3 else None
   device_format = '/TPU:{}' if 'TPU' in str(jax.devices()[0]) else '/GPU:{}'
@@ -132,13 +138,12 @@ def run_inception_distributed(input_tensor,
       res = run_inception_jit(
         tensor_on_device, inception_model, num_batches=num_batches,
         inceptionv3=inceptionv3)
-
+      
       if not inceptionv3:
         pool3.append(res['pool_3'])
         logits.append(res['logits'])  # pytype: disable=attribute-error
       else:
         pool3.append(res)
-
   with tf.device('/CPU'):
     return {
       'pool_3': tf.concat(pool3, axis=0),

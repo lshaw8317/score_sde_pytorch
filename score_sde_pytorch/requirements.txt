@@ -1,3 +1,4 @@
+pynvml
 ml-collections==0.1.0
 tensorflow-gan==2.0.0
 tensorflow-io
@@ -7,8 +8,7 @@ tensorflow-addons==0.12.0
 protobuf==3.20.*
 tensorboard==2.4.0
 tensorflow==2.4.0
-jax
-jaxlib
+jax==0.2.8
 absl-py==0.10.0
 numpy==1.19.5
 torchvision==0.8.0
@@ -16,4 +16,7 @@ torchaudio==0.7.0
 ninja
 tensorflow-probability==0.12.2
 matplotlib
-#conda create -c conda-forge -n scoresde_test python=3.8 cxx-compiler cudatoolkit=11.0 gxx_linux-64==11.1.0 cudnn=8.0
+#conda create -c conda-forge -c nvidia -n scoresde python=3.8 cxx-compiler cuda=11.3 gxx_linux-64==11.1.0 cudnn=8.0
+#pip install jaxlib==0.1.59 -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+#may also need to export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:~/.conda/envs/scoresde/lib
+#and export PATH=/usr/local/cuda/include:$PATH or export CPATH=$CPATH:/usr/local/cuda/include
