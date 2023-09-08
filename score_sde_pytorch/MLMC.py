@@ -26,6 +26,13 @@ def imagenorm(img):
     n/=np.sqrt(np.prod(s[1:]))
     return n
 
+def mom2norm(sqsums):
+    #sqsums should have shape L,C,H,W
+    s=sqsums.shape
+    if len(s)!=4:
+        raise Exception('shape of sqsums likely not LHCW')
+    return torch.sum(torch.flatten(sqsums, start_dim=1, end_dim=-1),dim=-1)/np.prod(s[1:])
+
 def activations_payoff(samples,inception_model,inceptionv3,config):
     samples=tf.convert_to_tensor(np.clip(samples.permute(0, 2, 3, 1).cpu().numpy() * 255., 0, 255).astype(np.uint8))
     # Force garbage collection before calling TensorFlow code for Inception network
@@ -72,7 +79,6 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
     tf.keras.backend.clear_session()
     
     # Create data normalizer and its inverse
-    alpha_0=0;beta_0=0 #orders of convergence of sde solvers
     scaler = datasets.get_data_scaler(config)
     inverse_scaler = datasets.get_data_inverse_scaler(config)
     
@@ -84,22 +90,26 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
         print('activations payoff selected for MLMC. Altering config file defaults correspondingly.')
         payoff = lambda samples: activations_payoff(samples, inception_model=inception_model, 
                                           inceptionv3=inceptionv3, config=config)
-        config.mlmc.min_l=3
+        config.mlmc.min_l=5
         config.eval.batch_size=128
         config.mlmc.N0=100
         accsplit=np.sqrt(0.01) #since beta<gamma, let error in bias be large and force error onto variance 
     elif payoff_arg=='variance':
         print('Pixel-wise variance payoff selected for MLMC. Altering config file defaults correspondingly.')
         config.mlmc.N0=1000
-        config.mlmc.min_l=3
+        config.mlmc.min_l=5
         config.eval.batch_size=1800
         payoff = lambda samples: samples**2
+        alpha_0=1.3
+        beta_0=1.8
     elif payoff_arg=='images':
         config.mlmc.N0=1000
-        config.mlmc.min_l=3
+        config.mlmc.min_l=5
         config.eval.batch_size=1800
+        alpha_0=1
+        beta_0=1.7
         print('Setting payoff function to images for MLMC.')
-        payoff = lambda samples: samples #default to calculating mean image
+        payoff = lambda samples: torch.clip(samples,0.,1.) #default to calculating mean image
     else:
         raise ValueError('payoff_arg not recognised. Should be one of variance, activations, images.')
     
@@ -162,7 +172,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
         samplerfun=EulerMaruyama
 
         
-    def mlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False):
+    def mlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=False):
         """ 
         The path function for Euler-Maruyama diffusion, which calculates final samples \sim p(x_0).
     
@@ -183,6 +193,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
             dWc=torch.zeros_like(xf).to(xc.device)
             dtc=0.
             tc=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
+            if saver:
+                saverlist=torch.cat((inverse_scaler(xf)[0][None,None,...],inverse_scaler(xc)[0][None,None,...]),dim=0)
             for i in range(Nf):
                 tf_ = fine_times[i]
                 dt=fine_times[i+1]-tf_
@@ -197,9 +209,21 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
                     dWc=torch.zeros_like(xc) #...Re-initialise coarse BI to 0
                     tc=tf_.clone().detach() #coarse solution now advanced to current fine time
                     dtc=0.
+                    if saver:
+                        temp=torch.cat((inverse_scaler(xf)[0][None,...],inverse_scaler(xc)[0][None,...]),dim=0)
+                        saverlist=torch.cat((saverlist,temp[None,...]),dim=0)
             #if denoise:
             #    return inverse_scaler(xf_mean),inverse_scaler(xc_mean)
             #else:
+            if saver:
+                this_sample_dir = os.path.join(eval_dir, f"level_{l}")
+                if not tf.io.gfile.exists(this_sample_dir):
+                    tf.io.gfile.makedirs(this_sample_dir)
+                with tf.io.gfile.GFile(os.path.join(this_sample_dir, "sample_progression.npz"), "wb") as fout:
+                    io_buffer = io.BytesIO()
+                    np.savez_compressed(io_buffer, samples=saverlist)
+                    fout.write(io_buffer.getvalue())
+                    
             return inverse_scaler(xf),inverse_scaler(xc)
         
     def looper(Nl,l,M,min_l=0):
@@ -309,11 +333,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
                     
             N+=dN #Increment samples taken counter for each level
             Yl=imagenorm(sums[:,0])/N
-            sumdims=tuple(range(1,len(sqsums[:,0].shape)))
-            s=sqsums[:,0].shape
-            V=torch.clip(
-                (torch.sum(sqsums[:,0],dim=sumdims).squeeze()/np.prod(s[1:]))/N-(Yl)**2
-                ,min=0) #Calculate variance based on updated samples
+            V=torch.clip(mom2norm(sqsums[:,0])/N-(Yl)**2,min=0) #Calculate variance based on updated samples
             
             ##Fix to deal with zero variance or mean by linear extrapolation
             Yl[2:]=torch.maximum(Yl[2:],.5*Yl[1:-1]*M**(-alpha))
@@ -365,7 +385,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
         M=config.mlmc.M
         N0=config.mlmc.N0
         Lmax=config.mlmc.Lmax
-        Nsamples=10000#config.mlmc.Nsamples
+        Nsamples=config.mlmc.Nsamples
         min_l=config.mlmc.min_l
 
         #Variance and mean samples
@@ -376,18 +396,16 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
         if not tf.io.gfile.exists(this_sample_dir):
             tf.io.gfile.makedirs(this_sample_dir)
             print(f'Proceeding to calculate variance and means with {Nsamples} estimator samples')
-            sums=torch.zeros((Lmax,*sums.shape[1:]))
-            sqsums=torch.zeros((Lmax,*sqsums.shape[1:]))
-            for i,l in enumerate(range(1,Lmax+1)):
+            sums=torch.zeros((Lmax+1,*sums.shape[1:]))
+            sqsums=torch.zeros((Lmax+1,*sqsums.shape[1:]))
+            for i,l in enumerate(range(0,Lmax+1)):
                 print(f'l={l}')
-                sums[i],sqsums[i] = looper(Nsamples,l,M,min_l=1)
+                sums[i],sqsums[i] = looper(Nsamples,l,M,min_l=0)
 
-            sumdims=tuple(range(1,len(sqsums[:,0].shape))) #sqsums is output of payoff element-wise squared, so reduce     
             means_p=imagenorm(sums[:,1])/Nsamples
-            s=sqsums[:,0].shape
-            V_p=(torch.sum(sqsums[:,1],dim=sumdims).squeeze()/np.prod(s[1:]))/Nsamples-means_p**2
+            V_p=mom2norm(sqsums[:,1])/Nsamples-means_p**2
             means_dp=imagenorm(sums[:,0])/Nsamples
-            V_dp=(torch.sum(sqsums[:,0],dim=sumdims).squeeze()/np.prod(s[1:]))/Nsamples-means_dp**2  
+            V_dp=mom2norm(sqsums[:,0])/Nsamples-means_dp**2  
         
             # Write samples to disk or Google Cloud Storage
             with tf.io.gfile.GFile(os.path.join(this_sample_dir, "averages.pt"), "wb") as fout:
@@ -400,12 +418,12 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
                 fout.write(io_buffer.getvalue())
             with tf.io.gfile.GFile(os.path.join(this_sample_dir, "Ls.pt"), "wb") as fout:
                 io_buffer = io.BytesIO()
-                torch.save(torch.arange(1,Lmax+1,dtype=torch.int32),io_buffer)
+                torch.save(torch.arange(0,Lmax+1,dtype=torch.int32),io_buffer)
                 fout.write(io_buffer.getvalue())
             
             #Estimate orders of weak (alpha from means) and strong (beta from variance) convergence using LR
-            X=np.ones((Lmax-1,2))
-            X[:,0]=np.arange(2,Lmax+1)
+            X=np.ones((Lmax,2))
+            X[:,0]=np.arange(1,Lmax+1)
             a = np.linalg.lstsq(X,np.log(means_dp[1:]),rcond=None)[0]
             alpha = -a[0]/np.log(M)
             b = np.linalg.lstsq(X,np.log(V_dp[1:]),rcond=None)[0]
@@ -435,12 +453,10 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
         for i in range(len(acc)):
             e=acc[i]
             print(f'Performing mlmc for accuracy={e}')
-            sums,sqsums,N=mlmc(e,M,alpha_0=alpha,beta_0=beta,N0=N0,min_l=min_l,Lmax=Lmax) #sums=[dX,Xf,Xc], sqsums=[||dX||^2,||Xf||^2,||Xc||^2]
+            sums,sqsums,N=mlmc(e,M,alpha_0=alpha_0,beta_0=beta_0,N0=N0,min_l=min_l,Lmax=Lmax) #sums=[dX,Xf,Xc], sqsums=[||dX||^2,||Xf||^2,||Xc||^2]
             L=len(N)-1+min_l
             means_p=imagenorm(sums[:,1])/N #Norm of mean of fine discretisations
-            sumdims=tuple(range(1,len(sqsums[:,0].shape))) #sqsums is output of payoff element-wise squared, so reduce
-            s=sqsums[:,0].shape
-            V_p=(torch.sum(sqsums[:,0],dim=sumdims).squeeze()/np.prod(s[1:]))/N-means_p**2
+            V_p=mom2norm(sqsums[:,1])/N-means_p**2
 
             #e^2*cost
             cost_mlmc=torch.sum(N*(M**np.arange(min_l,L+1)+np.hstack((0,M**np.arange(min_l,L)))))*e**2 #cost is number of NFE
