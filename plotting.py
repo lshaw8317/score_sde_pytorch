@@ -30,7 +30,7 @@ def imagenorm(img):
 fig,_=plt.subplots(2,2)
 markersize=(fig.get_size_inches()[0])
 axis_list=fig.axes
-expdir='cifar10_ddpmpp_continuous_means'
+expdir='cifar10_ddpmpp_continuous_images'
 switcher= 'means'#expdir.split('_')[-1]
 label='Testing MLMC Diffusion Models '+ switcher
 
@@ -55,7 +55,7 @@ if switcher=='means':
     ax[-1].imshow(CIFAR10mean)
     ax[-1].set_title('CIFAR10 MC Mean')
     ax[-1].set_axis_off()
-    Lmin=3
+    Lmin=5
     
 elif switcher=='secondmoments':
     with np.load('CIFAR10_MCmoment2.npz') as data:
@@ -85,7 +85,7 @@ with open(os.path.join(this_sample_dir, "sqaverages.pt"), "rb") as fout:
 
 sumdims=tuple(range(1,len(sqavgs[:,0].shape))) #sqsums is output of payoff element-wise squared, so reduce                        
 s=sqavgs[:,0].shape
-cutoff=0
+cutoff=4
 means_p=imagenorm(avgs[cutoff:,1])
 V_p=(torch.sum(sqavgs[cutoff:,1],axis=sumdims)/np.prod(s[1:]))-means_p**2 
 means_dp=imagenorm(avgs[cutoff:,0])
@@ -162,10 +162,7 @@ for i,f in enumerate(reversed(files)):
         actserrs[i]=reala
     else:
         raise Exception('switcher not recognised')
-    L=3+len(N)-1 
-    if e==.001:
-        Lmin=5
-        L=5+len(N)-1
+    L=Lmin+len(N)-1 
     
     sumdims=tuple(range(1,len(sqavgs[:,0].shape))) #sqsums is output of payoff element-wise squared, so reduce                        
     s=sqavgs[:,0].shape
