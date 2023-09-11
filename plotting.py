@@ -31,7 +31,7 @@ fig,_=plt.subplots(2,2)
 markersize=(fig.get_size_inches()[0])
 axis_list=fig.axes
 expdir='cifar10_ddpmpp_continuous_means'
-switcher=expdir.split('_')[-1]
+switcher= 'means'#expdir.split('_')[-1]
 label='Testing MLMC Diffusion Models '+ switcher
 
 
@@ -162,19 +162,22 @@ for i,f in enumerate(reversed(files)):
         actserrs[i]=reala
     else:
         raise Exception('switcher not recognised')
-    L=Lmin+len(N)-1
+    L=3+len(N)-1 
+    if e==.001:
+        Lmin=5
+        L=5+len(N)-1
     
-    # sumdims=tuple(range(1,len(sqavgs[:,0].shape))) #sqsums is output of payoff element-wise squared, so reduce                        
-    # s=sqavgs[:,0].shape
-    # cutoff=0
-    # means_p=imagenorm(avgs[cutoff:,1])
-    # V_p=(torch.sum(sqavgs[cutoff:,1],axis=sumdims)/np.prod(s[1:]))-means_p**2 
-    # means_dp=imagenorm(avgs[cutoff:,0])
-    # V_dp=(torch.sum(sqavgs[cutoff:,0],axis=sumdims)/np.prod(s[1:]))-means_dp**2  
+    sumdims=tuple(range(1,len(sqavgs[:,0].shape))) #sqsums is output of payoff element-wise squared, so reduce                        
+    s=sqavgs[:,0].shape
+    cutoff=0
+    means_p=imagenorm(avgs[cutoff:,1])
+    V_p=(torch.sum(sqavgs[cutoff:,1],axis=sumdims)/np.prod(s[1:]))-means_p**2 
+    means_dp=imagenorm(avgs[cutoff:,0])
+    V_dp=(torch.sum(sqavgs[cutoff:,0],axis=sumdims)/np.prod(s[1:]))-means_dp**2  
     
     cost_mlmc[i]=torch.sum(N*(M**np.arange(Lmin,L+1)+np.hstack((0,M**np.arange(Lmin,L)))))*e**2 #cost is number of NFE
     accsplit=(1/.01) if switcher=='acts' else 2
-    cost_mc[i]=accsplit*np.sum(V_p[-1].item()*(M**np.arange(3,L+1)))
+    cost_mc[i]=accsplit*V_p[-1]*(M**L)
 
     realvar[i]=torch.sum(V_dp/N)
     realbias[i]=(max(means_dp[-2]/M**(alpha),means_dp[-1])/(M**alpha-1))**2
