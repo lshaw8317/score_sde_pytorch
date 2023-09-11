@@ -490,7 +490,10 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
             # Write samples to disk or Google Cloud Storage        
             with open(os.path.join(this_sample_dir, "costs.npz"), "wb") as fout:
                 np.savez_compressed(fout,costmlmc=np.array(cost_mlmc),costmc=np.array(cost_mc))
-
+            
+            with open(os.path.join(this_sample_dir, "info_text.txt"),'w') as f:
+                f.write(f'MLMC params:epsilon={e}, alpha={alpha_0}, beta={beta_0}, N0={N0}, Lmax={Lmax}, Lmin={min_l}, M={M}, accsplit={accsplit}.\n')
+            
             meanimg=torch.sum(sums[:,0]/dividerN[:,0,...],axis=0)#cut off one dummy axis
             if payoff_arg=='images' or payoff_arg=='variance':
                 meanimg=np.clip(meanimg.permute(1, 2, 0).cpu().numpy() * 255., 0, 255).astype(np.uint8)
