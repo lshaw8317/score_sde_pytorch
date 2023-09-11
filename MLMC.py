@@ -99,15 +99,15 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
         config.mlmc.N0=1000
         config.mlmc.min_l=5
         config.eval.batch_size=1800
-        payoff = lambda samples: samples**2
+        payoff = lambda samples: torch.clip(samples,0.,1.)**2
         alpha_0=1.3
         beta_0=1.8
     elif payoff_arg=='images':
         config.mlmc.N0=1000
         config.mlmc.min_l=5
         config.eval.batch_size=1800
-        alpha_0=1
-        beta_0=1.7
+        alpha_0=.9
+        beta_0=1.5
         print('Setting payoff function to images for MLMC.')
         payoff = lambda samples: torch.clip(samples,0.,1.) #default to calculating mean image
     else:
