@@ -276,16 +276,16 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             xc = xf.clone().detach().to(config.device)
             dWc=torch.zeros_like(xf).to(xc.device)
             dWf=torch.zeros_like(xf).to(xc.device)
-            dtc=0.
-            dtf=0.
-            t=torch.Tensor([sde.T],dtype=torch.float32, device=xc.device)
-            tc=torch.Tensor([sde.T],dtype=torch.float32, device=xc.device)
-            tf_=torch.Tensor([sde.T],dtype=torch.float32, device=xc.device)
+            dtc=torch.zeros(1).to(xc.device)
+            dtf=torch.zeros(1).to(xc.device)
+            t=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
+            tc=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
+            tf_=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
             if saver:
                 coarselist=inverse_scaler(xc)[0][None,...]
                 finelist=inverse_scaler(xf)[0][None,...]
-                coarsetimes=torch.Tensor([sde.T])
-                finetimes=torch.Tensor([sde.T])
+                coarsetimes=torch.tensor([sde.T])
+                finetimes=torch.tensor([sde.T])
             
             while t>sampling_eps:
                 told=t
