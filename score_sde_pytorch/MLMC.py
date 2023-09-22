@@ -1,3 +1,4 @@
+from tokenize import Exponent
 from models import utils as mutils
 import os
 import gc
@@ -74,7 +75,7 @@ def activations_payoff(samples,inception_model,inceptionv3,config):
     all_pools=tf.convert_to_tensor(all_pools).numpy()
     return torch.tensor(all_pools) #should have (batch_size, 2048)
 
-def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True):
+def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler,adaptive=False, MLMC_=True):
     torch.cuda.empty_cache()
     tf.keras.backend.clear_session()
     
@@ -97,16 +98,16 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
     elif payoff_arg=='variance':
         print('Pixel-wise variance payoff selected for MLMC. Altering config file defaults correspondingly.')
         config.mlmc.N0=1000
-        config.mlmc.min_l=5
+        config.mlmc.min_l=7
         config.eval.batch_size=1800
         payoff = lambda samples: torch.clip(samples,0.,1.)**2
-        alpha_0=1.3
-        beta_0=1.8
+        alpha_0=.8
+        beta_0=1.5
     elif payoff_arg=='images':
         config.mlmc.N0=1000
-        config.mlmc.min_l=5
+        config.mlmc.min_l=7
         config.eval.batch_size=1800
-        alpha_0=.9
+        alpha_0=.8
         beta_0=1.5
         print('Setting payoff function to images for MLMC.')
         payoff = lambda samples: torch.clip(samples,0.,1.) #default to calculating mean image
@@ -140,6 +141,11 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
             return beta, stdt,stdtm1
         eta=config.mlmc.DDIM_eta
         sampling_eps = 0
+        def EIfactor(dt, t):
+            #dt<0
+            beta_t = sde.beta_0 + (t+.5*dt) * (sde.beta_1 - sde.beta_0)
+            return torch.exp(.5*(-dt)*beta_t)
+        
     elif config.training.sde.lower() == 'subvpsde':
         sde = sde_lib.subVPSDE(beta_min=config.model.beta_min, beta_max=config.model.beta_max, N=config.model.num_scales)
         sampling_eps = 1e-3
@@ -153,11 +159,42 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
     rsde = sde.reverse(score_fn, probability_flow=False)
     
     def EulerMaruyama(x, t, dt, dW):
+        #dt is negative
         drift, diffusion = rsde.sde(x, t)
         x_mean = x + drift * dt
         x = x_mean + diffusion[:, None, None, None] * dW
         return x, x_mean
     
+    def TamedEulerMaruyama(x, t, dt, dW):
+        drift, diffusion = rsde.sde(x, t)
+        norm_diff=imagenorm(drift)
+        x_mean = x + drift * dt/(1-dt*norm_diff) #dt is negative so -dt=+abs(dt)
+        x = x_mean + diffusion[:, None, None, None] * dW
+        return x, x_mean
+    
+    def SKROCK(x, t, dt, dW):
+        return 
+    
+    def ExponentialIntegrator(x, t, dt, dW):
+        #should only work for vpsde
+        factor=EIfactor(dt,t)[:, None, None, None]
+        stheta=score_fn(x,t)
+        x_mean=factor*x+2*(1.-factor)*stheta
+        x=x_mean+torch.sqrt(1.-factor**2)*dW/torch.sqrt(-dt)
+        return x, x_mean
+    
+    def AdaptiveEulerMaruyama(x, t, level_factor,sampling_eps=sampling_eps):
+        #dt is negative
+        vec_t = torch.ones(x.shape[0], device=x.device,dtype=torch.float32) * t
+        drift, diffusion = rsde.sde(x, vec_t)
+        h=2*imagenorm(drift)/(diffusion**2*imagenorm(x))
+        dt=-h*level_factor
+        dt=max(dt,sampling_eps-t) #dt negative
+        noise=torch.randn_like(x)*torch.sqrt(-dt)
+        x_mean = x + drift * dt
+        x = x_mean + diffusion[:, None, None, None] * noise
+        return x, x_mean,t+dt,noise
+
     def DDIMSampler(x, t, dt, dW):
         beta, stdt, stdtm1 = getbetas(x,t[0],dt) #t should be vector of copies of times so just get first element
         stheta=score_fn(x,t)
@@ -170,9 +207,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
     else:
         print('Setting sampler for MLMC to Euler-Maruyama.')
         samplerfun=EulerMaruyama
-
-        
-    def mlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=False):
+    
+    def nonadaptivemlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=False):
         """ 
         The path function for Euler-Maruyama diffusion, which calculates final samples \sim p(x_0).
     
@@ -225,7 +261,62 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
                     fout.write(io_buffer.getvalue())
                     
             return inverse_scaler(xf),inverse_scaler(xc)
-        
+
+    def adaptivemlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=False):
+        """ 
+        The path function for Euler-Maruyama diffusion, which calculates final samples \sim p(x_0).
+    
+        Parameters:
+            bs(int): batch size to generate number of samples
+            l(int) : discretisation level
+            M(int) : coarseness factor, number of fine steps = M**l
+        Returns:
+            Xf,Xc (numpy.array) : final samples for N_loop sample paths (Xc=X0 if l==0)
+        """
+
+        with torch.no_grad():
+            xf = sde.prior_sampling((bs,*sampling_shape[-3:])).to(config.device)
+            xc = xf.clone().detach().to(config.device)
+            dWc=torch.zeros_like(xc).to(xc.device)
+            tc=sde.T
+            tf_=sde.T
+            if saver:
+                coarselist=inverse_scaler(xc)[0][None,...]
+                finelist=inverse_scaler(xf)[0][None,...]
+                times=torch.Tensor([sde.T])
+            counter=0
+            while tf_>sampling_eps:
+                xf,xf_mean,tf_,dWf=AdaptiveEulerMaruyama(xf,tf_,M**-l,sampling_eps)
+                dWc+=dWf
+                counter+=1
+                if counter==M or abs(tf_-sampling_eps)<1e-5*sampling_eps: #do an extra coarse step to get up to sampling_eps
+                    dtc=tf_-tc #tc>tf_
+                    vec_t = torch.ones(bs, device=xc.device,dtype=torch.float32) * tc
+                    xc,xc_mean=EulerMaruyama(xc,vec_t,dtc,dWc)
+                    dWc*=0.
+                    counter=0
+                    tc=tf_ #coarse solution has been advanced to fine time
+                    if saver:
+                        finelist=torch.cat((finelist,inverse_scaler(xf)[0]),dim=0)
+                        coarselist=torch.cat((coarselist,inverse_scaler(xc)[0]),dim=0)
+                        times=torch.cat((coarsetimes,torch.Tensor([tc])),dim=0)
+                
+            if saver:
+                this_sample_dir = os.path.join(eval_dir, f"level_{l}")
+                if not tf.io.gfile.exists(this_sample_dir):
+                    tf.io.gfile.makedirs(this_sample_dir)
+                with tf.io.gfile.GFile(os.path.join(this_sample_dir, "sample_progression.npz"), "wb") as fout:
+                    io_buffer = io.BytesIO()
+                    np.savez_compressed(io_buffer, coarsesamples=coarselist,finesamples=finelist,times=times)
+                    fout.write(io_buffer.getvalue())
+            
+            if denoise:
+                return inverse_scaler(xf_mean),inverse_scaler(xc_mean)
+            else: 
+                return inverse_scaler(xf),inverse_scaler(xc)
+    
+    mlmc_sample = adaptivemlmc_sample if adaptive else nonadaptivemlmc_sample
+
     def looper(Nl,l,M,min_l=0):
         """ 
         Interfaces with mlmc function to implement loop over Nl samples and generate payoff sums.
