@@ -97,16 +97,16 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
     elif payoff_arg=='variance':
         print('Pixel-wise variance payoff selected for MLMC. Altering config file defaults correspondingly.')
         config.mlmc.N0=1000
-        config.mlmc.min_l=5
+        config.mlmc.min_l=6
         config.eval.batch_size=1800
         payoff = lambda samples: torch.clip(samples,0.,1.)**2
-        alpha_0=1.3
-        beta_0=1.8
+        alpha_0=.8
+        beta_0=1.5
     elif payoff_arg=='images':
         config.mlmc.N0=1000
-        config.mlmc.min_l=5
+        config.mlmc.min_l=6
         config.eval.batch_size=1800
-        alpha_0=.9
+        alpha_0=.8
         beta_0=1.5
         print('Setting payoff function to images for MLMC.')
         payoff = lambda samples: torch.clip(samples,0.,1.) #default to calculating mean image
@@ -310,7 +310,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
         alpha=max(0,alpha_0)
         beta=max(0,beta_0)
         
-        L=min_l+2
+        L=min_l+1
 
         mylen=L+1-min_l
         V=torch.zeros(mylen) #Initialise variance vector of each levels' variance
@@ -356,11 +356,11 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
             sqrt_V=torch.sqrt(V)
             Nl_new=torch.ceil(((accsplit*accuracy)**-2)*torch.sum(sqrt_V*sqrt_cost)*(sqrt_V/sqrt_cost)) #Estimate optimal number of samples/level
             dN=torch.clip(Nl_new-N,min=0) #Number of additional samples
-            print(Yl)
-            print(f'Estimated std = {torch.sqrt(torch.sum(V/N))}. Estimated bias={(max(Yl[-1],Yl[-2]/M**alpha)/(M**alpha-1))}')
-            print(f'Asking for {dN} new samples for l=[{min_l,L}]')
+            print(f'Estimated std = {torch.sqrt(torch.sum(V/N))}. Estimated bias={Yl[-1]/(M**alpha-1)}')
+            print(f'Asking for {dN} new samples for l={min_l,L}')
             if torch.sum(dN > 0.01*N).item() == 0: #Almost converged
-                if max(Yl[-2]/(M**alpha),Yl[-1])>(M**alpha-1)*accuracy*np.sqrt(1-accsplit**2):
+                test=max(Yl[-2]/(M**alpha),Yl[-1]) if len(N)>2 else Yl[-1]
+                if test>(M**alpha-1)*accuracy*np.sqrt(1-accsplit**2):
                     L+=1
                     print(f'Increased L to {L}.')
                     if (L>Lmax):
@@ -374,7 +374,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
                     Nl_new=torch.ceil(((accsplit*accuracy)**-2)*torch.sum(sqrt_V*sqrt_cost)*(sqrt_V/sqrt_cost)) #Estimate optimal number of sample
                     N=torch.cat((N,torch.tensor([0])),dim=0)
                     dN=torch.clip(Nl_new-N,min=0) #Number of additional samples
-                    print(f'With new L, estimate of {dN} new samples for l=[{min_l,L}]')
+                    print(f'With new L, estimate of {dN} new samples for l={min_l,L}')
                     sums=torch.cat((sums,torch.zeros((1,*sums[0].shape))),dim=0)
                     sqsums=torch.cat((sqsums,torch.zeros((1,*sqsums[0].shape))),dim=0)
                     
