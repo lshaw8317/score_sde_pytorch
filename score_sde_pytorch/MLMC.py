@@ -75,7 +75,7 @@ def activations_payoff(samples,inception_model,inceptionv3,config):
     all_pools=tf.convert_to_tensor(all_pools).numpy()
     return torch.tensor(all_pools) #should have (batch_size, 2048)
 
-def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler,adaptive=False, MLMC_=True):
+def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adaptive=False, MLMC_=True):
     torch.cuda.empty_cache()
     tf.keras.backend.clear_session()
     
@@ -202,7 +202,13 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler,adaptive=Fal
         x = x_mean + eta * stdtm1*torch.sqrt(beta)/stdt*dW/torch.sqrt(-dt)
         return x, x_mean
     
-    if sampler.lower()=='ddim':
+    if sampler.lower()=='skrock':
+        samplerfun=SKROCK
+    elif sampler.lower()=='expint':
+        samplerfun=ExponentialIntegrator
+    elif sampler.lower()=='tem':
+        samplerfun=TamedEulerMaruyama
+    elif sampler.lower()=='ddim':
         samplerfun=DDIMSampler
     else:
         print('Setting sampler for MLMC to Euler-Maruyama.')
