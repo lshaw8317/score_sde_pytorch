@@ -167,7 +167,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
     
     def TamedEulerMaruyama(x, t, dt, dW):
         drift, diffusion = rsde.sde(x, t)
-        norm_diff=imagenorm(drift)
+        norm_diff=imagenorm(drift)[:,None,None,None]
         x_mean = x + drift * dt/(1-dt*norm_diff) #dt is negative so -dt=+abs(dt)
         x = x_mean + diffusion[:, None, None, None] * dW
         return x, x_mean
@@ -187,7 +187,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         #dt is negative
         vec_t = torch.ones(x.shape[0], device=x.device,dtype=torch.float32) * t
         drift, diffusion = rsde.sde(x, vec_t)
-        h=2*imagenorm(drift)/(diffusion**2*imagenorm(x))
+        h=torch.min(2*imagenorm(drift)/(diffusion**2*imagenorm(x)))
         dt=-h*level_factor
         dt=max(dt,sampling_eps-t) #dt negative
         noise=torch.randn_like(x)*torch.sqrt(-dt)
@@ -279,20 +279,19 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         Returns:
             Xf,Xc (numpy.array) : final samples for N_loop sample paths (Xc=X0 if l==0)
         """
-
         with torch.no_grad():
             xf = sde.prior_sampling((bs,*sampling_shape[-3:])).to(config.device)
             xc = xf.clone().detach().to(config.device)
             dWc=torch.zeros_like(xc).to(xc.device)
-            tc=sde.T
-            tf_=sde.T
+            tc=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
+            tf_=torch.tensor([sde.T],dtype=torch.float32).to(xf.device)
             if saver:
                 coarselist=inverse_scaler(xc)[0][None,...]
                 finelist=inverse_scaler(xf)[0][None,...]
                 times=torch.Tensor([sde.T])
             counter=0
             while tf_>sampling_eps:
-                xf,xf_mean,tf_,dWf=AdaptiveEulerMaruyama(xf,tf_,M**-l,sampling_eps)
+                xf,xf_mean,tf_,dWf=AdaptiveEulerMaruyama(xf,tf_,1./M**l,sampling_eps)
                 dWc+=dWf
                 counter+=1
                 if counter==M or abs(tf_-sampling_eps)<1e-5*sampling_eps: #do an extra coarse step to get up to sampling_eps
@@ -488,9 +487,11 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         min_l=config.mlmc.min_l
 
         #Variance and mean samples
-        sums,sqsums,_=mlmc(1e5,M,N0=1,min_l=0) #dummy run to get sum shapes 
+        tpayoff=payoff(torch.randn(*sampling_shape[1:]))
+        sums=torch.zeros((1,3,*tpayoff.shape))
+        sqsums=torch.zeros((1,4,*tpayoff.shape))
 
-        # Directory to save means and norms                                                                                               
+        # Directory to save means and norms                          
         this_sample_dir = os.path.join(eval_dir, f"VarMean_M_{M}_Nsamples_{Nsamples}")
         if not tf.io.gfile.exists(this_sample_dir):
             tf.io.gfile.makedirs(this_sample_dir)
