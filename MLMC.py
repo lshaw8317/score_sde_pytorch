@@ -97,14 +97,14 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc,sampler, MLMC_=True)
     elif payoff_arg=='variance':
         print('Pixel-wise variance payoff selected for MLMC. Altering config file defaults correspondingly.')
         config.mlmc.N0=1000
-        config.mlmc.min_l=6
+        config.mlmc.min_l=7
         config.eval.batch_size=1800
         payoff = lambda samples: torch.clip(samples,0.,1.)**2
         alpha_0=.8
         beta_0=1.5
     elif payoff_arg=='images':
         config.mlmc.N0=1000
-        config.mlmc.min_l=6
+        config.mlmc.min_l=7
         config.eval.batch_size=1800
         alpha_0=.8
         beta_0=1.5
