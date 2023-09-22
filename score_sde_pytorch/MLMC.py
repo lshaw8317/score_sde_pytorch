@@ -299,7 +299,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                 if t==tc:#...Develop coarse path
                     vec_t = torch.ones(bs, device=xc.device,dtype=torch.float32) * (tc-dtc)
                     xc,xc_mean=samplerfun(xc,vec_t,dtc,dWc) 
-                    dtc=hfunc(xc,tc)/(M**(l-1))
+                    dtc=-hfunc(xc,tc)/(M**(l-1))
                     dtc=torch.max(dtc,sampling_eps-t) #dtc negative
                     tc+=dtc #tc should decrease
                     dWc*=0.
@@ -309,7 +309,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                 if t==tf_:
                     vec_t = torch.ones(bs, device=xf.device,dtype=torch.float32) * (tf_-dtf)
                     xf,xf_mean=samplerfun(xf,vec_t,dtf,dWf)
-                    dtf=hfunc(xf,tf_)/(M**l)
+                    dtf=-hfunc(xf,tf_)/(M**l)
                     dtf=torch.max(dtf,sampling_eps-t) #dtf negative
                     tf_+=dtf #tf_ should decrease
                     dWf*=0.
