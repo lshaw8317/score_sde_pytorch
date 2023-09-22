@@ -279,32 +279,52 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         Returns:
             Xf,Xc (numpy.array) : final samples for N_loop sample paths (Xc=X0 if l==0)
         """
+        def hfunc(x,t):
+            _,std=sde.marginal_prob(x,t)
+            _,diffusion=sde.sde(x,t)
+            return (2/diffusion**2)/(1.+2./(std*torch.min(imagenorm(x))))
         with torch.no_grad():
             xf = sde.prior_sampling((bs,*sampling_shape[-3:])).to(config.device)
             xc = xf.clone().detach().to(config.device)
-            dWc=torch.zeros_like(xc).to(xc.device)
-            tc=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
-            tf_=torch.tensor([sde.T],dtype=torch.float32).to(xf.device)
+            dWc=torch.zeros_like(xf).to(xc.device)
+            dWf=torch.zeros_like(xf).to(xc.device)
+            dtc=0.
+            dtf=0.
+            t=sde.T
+            tc=sde.T
+            tf_=sde.T
             if saver:
                 coarselist=inverse_scaler(xc)[0][None,...]
                 finelist=inverse_scaler(xf)[0][None,...]
-                times=torch.Tensor([sde.T])
-            counter=0
-            while tf_>sampling_eps:
-                xf,xf_mean,tf_,dWf=AdaptiveEulerMaruyama(xf,tf_,1./M**l,sampling_eps)
-                dWc+=dWf
-                counter+=1
-                if counter==M or abs(tf_-sampling_eps)<1e-5*sampling_eps: #do an extra coarse step to get up to sampling_eps
-                    dtc=tf_-tc #tc>tf_
-                    vec_t = torch.ones(bs, device=xc.device,dtype=torch.float32) * tc
-                    xc,xc_mean=EulerMaruyama(xc,vec_t,dtc,dWc)
+                coarsetimes=torch.Tensor([sde.T])
+                finetimes=torch.Tensor([sde.T])
+            
+            while t>sampling_eps:
+                told=t
+                t=max(tc,tf_)                
+                dW = torch.randn_like(xf)*torch.sqrt(told-t)
+                dWf +=dW
+                dWc +=dW
+                if t==tc:#...Develop coarse path
+                    vec_t = torch.ones(bs, device=xc.device,dtype=torch.float32) * (tc-dtc)
+                    xc,xc_mean=samplerfun(xc,vec_t,dtc,dWc) 
+                    dtc=hfunc(xc,tc)*M**-(l-1)
+                    dtc=max(dtc,sampling_eps-t) #dtc negative
+                    tc+=dtc #tc should decrease
                     dWc*=0.
-                    counter=0
-                    tc=tf_ #coarse solution has been advanced to fine time
+                    if saver:
+                        coarselist=torch.cat((coarselist,inverse_scaler(xc)[0]),dim=0)
+                        coarsetimes=torch.cat((coarsetimes,torch.Tensor([t])),dim=0)
+                if t==tf_:
+                    vec_t = torch.ones(bs, device=xf.device,dtype=torch.float32) * (tf_-dtf)
+                    xf,xf_mean=samplerfun(xf,vec_t,dtf,dWf)
+                    dtf=hfunc(xf,tf_)*M**-l
+                    dtf=max(dtf,sampling_eps-t) #dtf negative
+                    tf_+=dtf #tf_ should decrease
+                    dWf*=0.
                     if saver:
                         finelist=torch.cat((finelist,inverse_scaler(xf)[0]),dim=0)
-                        coarselist=torch.cat((coarselist,inverse_scaler(xc)[0]),dim=0)
-                        times=torch.cat((coarsetimes,torch.Tensor([tc])),dim=0)
+                        finetimes=torch.cat((finetimes,torch.Tensor([t])),dim=0)
                 
             if saver:
                 this_sample_dir = os.path.join(eval_dir, f"level_{l}")
@@ -312,14 +332,14 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     tf.io.gfile.makedirs(this_sample_dir)
                 with tf.io.gfile.GFile(os.path.join(this_sample_dir, "sample_progression.npz"), "wb") as fout:
                     io_buffer = io.BytesIO()
-                    np.savez_compressed(io_buffer, coarsesamples=coarselist,finesamples=finelist,times=times)
+                    np.savez_compressed(io_buffer, coarsesamples=coarselist,finesamples=finelist,coarsetimes=coarsetimes,finetimes=finetimes)
                     fout.write(io_buffer.getvalue())
             
             if denoise:
                 return inverse_scaler(xf_mean),inverse_scaler(xc_mean)
             else: 
                 return inverse_scaler(xf),inverse_scaler(xc)
-    
+        
     mlmc_sample = adaptivemlmc_sample if adaptive else nonadaptivemlmc_sample
 
     def looper(Nl,l,M,min_l=0):
