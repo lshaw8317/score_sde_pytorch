@@ -182,18 +182,6 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         x_mean=factor*x+2*(1.-factor)*stheta
         x=x_mean+torch.sqrt(1.-factor**2)*dW/torch.sqrt(-dt)
         return x, x_mean
-    
-    def AdaptiveEulerMaruyama(x, t, level_factor,sampling_eps=sampling_eps):
-        #dt is negative
-        vec_t = torch.ones(x.shape[0], device=x.device,dtype=torch.float32) * t
-        drift, diffusion = rsde.sde(x, vec_t)
-        h=torch.min(2*imagenorm(drift)/(diffusion**2*imagenorm(x)))
-        dt=-h*level_factor
-        dt=max(dt,sampling_eps-t) #dt negative
-        noise=torch.randn_like(x)*torch.sqrt(-dt)
-        x_mean = x + drift * dt
-        x = x_mean + diffusion[:, None, None, None] * noise
-        return x, x_mean,t+dt,noise
 
     def DDIMSampler(x, t, dt, dW):
         beta, stdt, stdtm1 = getbetas(x,t[0],dt) #t should be vector of copies of times so just get first element
@@ -290,9 +278,9 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             dWf=torch.zeros_like(xf).to(xc.device)
             dtc=0.
             dtf=0.
-            t=sde.T
-            tc=sde.T
-            tf_=sde.T
+            t=torch.Tensor([sde.T],dtype=torch.float32, device=xc.device)
+            tc=torch.Tensor([sde.T],dtype=torch.float32, device=xc.device)
+            tf_=torch.Tensor([sde.T],dtype=torch.float32, device=xc.device)
             if saver:
                 coarselist=inverse_scaler(xc)[0][None,...]
                 finelist=inverse_scaler(xf)[0][None,...]
@@ -301,7 +289,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             
             while t>sampling_eps:
                 told=t
-                t=max(tc,tf_)                
+                t=torch.max(tc,tf_)                
                 dW = torch.randn_like(xf)*torch.sqrt(told-t)
                 dWf +=dW
                 dWc +=dW
@@ -309,22 +297,22 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     vec_t = torch.ones(bs, device=xc.device,dtype=torch.float32) * (tc-dtc)
                     xc,xc_mean=samplerfun(xc,vec_t,dtc,dWc) 
                     dtc=hfunc(xc,tc)*M**-(l-1)
-                    dtc=max(dtc,sampling_eps-t) #dtc negative
+                    dtc=torch.max(dtc,sampling_eps-t) #dtc negative
                     tc+=dtc #tc should decrease
                     dWc*=0.
                     if saver:
                         coarselist=torch.cat((coarselist,inverse_scaler(xc)[0]),dim=0)
-                        coarsetimes=torch.cat((coarsetimes,torch.Tensor([t])),dim=0)
+                        coarsetimes=torch.cat((coarsetimes,t),dim=0)
                 if t==tf_:
                     vec_t = torch.ones(bs, device=xf.device,dtype=torch.float32) * (tf_-dtf)
                     xf,xf_mean=samplerfun(xf,vec_t,dtf,dWf)
                     dtf=hfunc(xf,tf_)*M**-l
-                    dtf=max(dtf,sampling_eps-t) #dtf negative
+                    dtf=torch.max(dtf,sampling_eps-t) #dtf negative
                     tf_+=dtf #tf_ should decrease
                     dWf*=0.
                     if saver:
                         finelist=torch.cat((finelist,inverse_scaler(xf)[0]),dim=0)
-                        finetimes=torch.cat((finetimes,torch.Tensor([t])),dim=0)
+                        finetimes=torch.cat((finetimes,t),dim=0)
                 
             if saver:
                 this_sample_dir = os.path.join(eval_dir, f"level_{l}")
