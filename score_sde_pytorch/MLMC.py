@@ -87,6 +87,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
     inceptionv3 = config.data.image_size >= 256
     inception_model = evaluation.get_inception_model(inceptionv3=inceptionv3)
     accsplit=np.sqrt(.5) #default even bias-variance split
+    config.model.num_scales=(config.mlmc.M)**(config.mlmc.Lmax)
     if payoff_arg=='activations':
         print('activations payoff selected for MLMC. Altering config file defaults correspondingly.')
         payoff = lambda samples: activations_payoff(samples, inception_model=inception_model, 
@@ -133,13 +134,13 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         def getbetas(x, t, dt):
             timestep = (t * (sde.N - 1) / sde.T).long()
             timestepm1 = ((t+dt) * (sde.N - 1) / sde.T).long()
-
-            beta = sde.discrete_betas.to(x.device)[timestep]
-            stdt =sde.sqrt_1m_alphas_cumprod.to(x.device)[timestep]
-            stdtm1 =sde.sqrt_1m_alphas_cumprod.to(x.device)[timestepm1]
+            sqrtalphat=sde.sqrt_alphas_cumprod[timestep].to(x.device)
+            sqrtalphatm1=sde.sqrt_alphas_cumprod[timestepm1].to(x.device)
+            stdt =sde.sqrt_1m_alphas_cumprod[timestep].to(x.device)
+            stdtm1 =sde.sqrt_1m_alphas_cumprod[timestepm1].to(x.device)
             
-            return beta, stdt,stdtm1
-        eta=config.mlmc.DDIM_eta
+            return sqrtalphat, sqrtalphatm1, stdt,stdtm1
+        DDIMeta=config.mlmc.DDIM_eta
         sampling_eps = 0
         def EIfactor(dt, t):
             #dt<0
@@ -168,7 +169,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
     def TamedEulerMaruyama(x, t, dt, dW):
         drift, diffusion = rsde.sde(x, t)
         norm_diff=imagenorm(drift)[:,None,None,None]
-        x_mean = x + drift * dt/(1-dt*norm_diff) #dt is negative so -dt=+abs(dt)
+        x_mean = x + drift * dt/(1-dt*norm_diff) #dt is negative so -dt=abs(dt)
         x = x_mean + diffusion[:, None, None, None] * dW
         return x, x_mean
     
@@ -183,11 +184,12 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         x=x_mean+torch.sqrt(factor**2-1.)*dW/torch.sqrt(-dt)
         return x, x_mean
 
-    def DDIMSampler(x, t, dt, dW):
-        beta, stdt, stdtm1 = getbetas(x,t[0],dt) #t should be vector of copies of times so just get first element
+    def DDIMSampler(x, t, dt, dW,eta=DDIMeta):
+        sat,satm1, stdt, stdtm1 = getbetas(x,t[0],dt) #t should be vector of copies of times so just get first element
         stheta=score_fn(x,t)
-        x_mean = (x + stdt**2*stheta)/torch.sqrt(1.-beta)-torch.sqrt(stdt**2-eta**2*beta)*stdtm1*stheta
-        x = x_mean + eta * stdtm1*torch.sqrt(beta)/stdt*dW/torch.sqrt(-dt)
+        b=(sat/satm1)
+        x_mean = (1./b)*(x + stdt**2*stheta)-torch.sqrt(stdt**2-eta**2*(1-b**2))*stdtm1*stheta
+        x = x_mean + eta * stdtm1*torch.sqrt(1.-b**2)/stdt*dW/torch.sqrt(-dt)
         return x, x_mean
     
     if sampler.lower()=='skrock':
@@ -297,7 +299,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                 if t==tc:#...Develop coarse path
                     vec_t = torch.ones(bs, device=xc.device,dtype=torch.float32) * (tc-dtc)
                     xc,xc_mean=samplerfun(xc,vec_t,dtc,dWc) 
-                    dtc=hfunc(xc,tc)*M**-(l-1)
+                    dtc=hfunc(xc,tc)/(M**(l-1))
                     dtc=torch.max(dtc,sampling_eps-t) #dtc negative
                     tc+=dtc #tc should decrease
                     dWc*=0.
@@ -307,7 +309,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                 if t==tf_:
                     vec_t = torch.ones(bs, device=xf.device,dtype=torch.float32) * (tf_-dtf)
                     xf,xf_mean=samplerfun(xf,vec_t,dtf,dWf)
-                    dtf=hfunc(xf,tf_)*M**-l
+                    dtf=hfunc(xf,tf_)/(M**l)
                     dtf=torch.max(dtf,sampling_eps-t) #dtf negative
                     tf_+=dtf #tf_ should decrease
                     dWf*=0.
