@@ -179,8 +179,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         #should only work for vpsde
         factor=EIfactor(dt,t)[:, None, None, None]
         stheta=score_fn(x,t)
-        x_mean=factor*x+2*(1.-factor)*stheta
-        x=x_mean+torch.sqrt(1.-factor**2)*dW/torch.sqrt(-dt)
+        x_mean=factor*x+2*(factor-1.)*stheta
+        x=x_mean+torch.sqrt(factor**2-1.)*dW/torch.sqrt(-dt)
         return x, x_mean
 
     def DDIMSampler(x, t, dt, dW):
@@ -271,6 +271,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             _,std=sde.marginal_prob(x,t)
             _,diffusion=sde.sde(x,t)
             return (2/diffusion**2)/(1.+2./(std*torch.min(imagenorm(x))))
+        
         with torch.no_grad():
             xf = sde.prior_sampling((bs,*sampling_shape[-3:])).to(config.device)
             xc = xf.clone().detach().to(config.device)
