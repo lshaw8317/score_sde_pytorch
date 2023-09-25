@@ -258,7 +258,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     
             return inverse_scaler(xf),inverse_scaler(xc)
 
-    def adaptivemlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=False):
+    def adaptivemlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=True):
         """ 
         The path function for Euler-Maruyama diffusion, which calculates final samples \sim p(x_0).
     
@@ -273,7 +273,6 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             _,std=sde.marginal_prob(x,t)
             _,diffusion=sde.sde(x,t)
             h=(2/diffusion**2)/(1.+2./(std*torch.min(imagenorm(x))))
-            print(h)
             return h
         
         with torch.no_grad():
@@ -289,8 +288,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             if saver:
                 coarselist=inverse_scaler(xc)[0][None,...]
                 finelist=inverse_scaler(xf)[0][None,...]
-                coarsetimes=torch.tensor([sde.T])
-                finetimes=torch.tensor([sde.T])
+                coarsetimes=torch.tensor([sde.T])[None,...]
+                finetimes=torch.tensor([sde.T])[None,...]
             
             while t>sampling_eps:
                 told=t
@@ -306,8 +305,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     tc+=dtc #tc should decrease
                     dWc*=0.
                     if saver:
-                        coarselist=torch.cat((coarselist,inverse_scaler(xc)[0]),dim=0)
-                        coarsetimes=torch.cat((coarsetimes,t),dim=0)
+                        coarselist=torch.cat((coarselist,inverse_scaler(xc)[0][None,...]),dim=0)
+                        coarsetimes=torch.cat((coarsetimes,t[None,...].cpu()),dim=0)
                 if t==tf_:
                     vec_t = torch.ones(bs, device=xf.device,dtype=torch.float32) * (tf_-dtf)
                     xf,xf_mean=samplerfun(xf,vec_t,dtf,dWf)
@@ -316,8 +315,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     tf_+=dtf #tf_ should decrease
                     dWf*=0.
                     if saver:
-                        finelist=torch.cat((finelist,inverse_scaler(xf)[0]),dim=0)
-                        finetimes=torch.cat((finetimes,t),dim=0)
+                        finelist=torch.cat((finelist,inverse_scaler(xf)[0][None,...]),dim=0)
+                        finetimes=torch.cat((finetimes,t[None,...].cpu()),dim=0)
                 
             if saver:
                 this_sample_dir = os.path.join(eval_dir, f"level_{l}")
@@ -325,7 +324,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     tf.io.gfile.makedirs(this_sample_dir)
                 with tf.io.gfile.GFile(os.path.join(this_sample_dir, "sample_progression.npz"), "wb") as fout:
                     io_buffer = io.BytesIO()
-                    np.savez_compressed(io_buffer, coarsesamples=coarselist,finesamples=finelist,coarsetimes=coarsetimes,finetimes=finetimes)
+                    np.savez_compressed(io_buffer, coarsesamples=coarselist.cpu().numpy(),finesamples=finelist.cpu().numpy(),coarsetimes=coarsetimes.cpu().numpy(),finetimes=finetimes.cpu().numpy())
                     fout.write(io_buffer.getvalue())
             
             if denoise:
