@@ -547,7 +547,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                 extrastr="continuous" if config.training.continuous else ''
                 f.write(f'Dataset:{config.data.dataset}. Model: {config.model.name}, {extrastr}, {config.training.sde}.\n')
                 f.write(f'Payoff:{payoff_arg}\n')
-                f.write(f'Sampler:{sampler}. DDIM_eta={eta}. Sampling eps={sampling_eps}.\n')
+                f.write(f'Sampler:{sampler}. DDIM_eta={DDIMeta}. Sampling eps={sampling_eps}.\n')
                 f.write(f'MLMC params: N0={N0}, Lmax={Lmax}, Lmin={min_l}, Nsamples={Nsamples}, M={M}, accsplit={accsplit}.\n')
                 f.write(f'Estimated alpha={alpha}\n Estimated beta={beta}. Plotting Lmin=1.')
             with tf.io.gfile.GFile(os.path.join(this_sample_dir, "alphabeta.pt"), "wb") as fout:
@@ -638,7 +638,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         with open(os.path.join(this_sample_dir, "info_text.txt"),'w') as f:
             extrastr="continuous" if config.training.continuous else ''
             f.write(f'Dataset:{config.data.dataset}. Model: {config.model.name}, {extrastr}, {config.training.sde}. \n')
-            f.write(f'Sampler:{sampler}. DDIM_eta={eta}. Sampling eps={sampling_eps}.\n')
+            f.write(f'Sampler:{sampler}. DDIM_eta={DDIMeta}. Sampling eps={sampling_eps}.\n')
             f.write(f'MC params:L={l}, Nsamples={Nl}, M={M}.')
         num_sampling_rounds = Nl // config.eval.batch_size + 1
         numrem=Nl % config.eval.batch_size
