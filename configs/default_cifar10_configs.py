@@ -74,7 +74,7 @@ def get_default_configs():
   mlmc.Nsamples=10**3 #samples to use to estimate variance and mean of payoff
   mlmc.M=2
   mlmc.Lmax=int(np.log(model.num_scales)/np.log(mlmc.M))
-  mlmc.DDIM_eta=0
+  mlmc.DDIM_eta=1.
   
   config.seed = 42
   config.device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
