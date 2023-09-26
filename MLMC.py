@@ -136,10 +136,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             timestepm1 = ((t+dt) * (sde.N - 1) / sde.T).long()
             sqrtalphat=sde.sqrt_alphas_cumprod[timestep].to(x.device)
             sqrtalphatm1=sde.sqrt_alphas_cumprod[timestepm1].to(x.device)
-            stdt =sde.sqrt_1m_alphas_cumprod[timestep].to(x.device)
-            stdtm1 =sde.sqrt_1m_alphas_cumprod[timestepm1].to(x.device)
             
-            return sqrtalphat, sqrtalphatm1, stdt,stdtm1
+            return sqrtalphat, sqrtalphatm1
         DDIMeta=config.mlmc.DDIM_eta
         sampling_eps = 0
         def EIfactor(dt, t):
@@ -185,8 +183,10 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         return x, x_mean
 
     def DDIMSampler(x, t, dt, dW,eta=DDIMeta):
-        sat,satm1, stdt, stdtm1 = getbetas(x,t[0],dt) #t should be vector of copies of times so just get first element
+        sat,satm1 = getbetas(x,t[0],dt) #t should be vector of copies of times so just get first element
         stheta=score_fn(x,t)
+        stdt=1.-sat**2
+        stdtm1=1.-satm1**2
         b=(sat/satm1)
         x_mean = (1./b)*(x + stdt**2*stheta)-torch.sqrt(stdt**2-eta**2*(1-b**2))*stdtm1*stheta
         x = x_mean + eta * stdtm1*torch.sqrt(1.-b**2)/stdt*dW/torch.sqrt(-dt)
@@ -272,7 +272,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         def hfunc(x,t):
             _,std=sde.marginal_prob(x,t)
             _,diffusion=sde.sde(x,t)
-            h=(2/diffusion**2)/(1.+2./(std*torch.min(imagenorm(x))))
+            h=(2/diffusion**2)/(1.+2./(std*torch.max(imagenorm(x))))
             return h
         
         with torch.no_grad():
