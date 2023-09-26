@@ -35,17 +35,19 @@ flags.DEFINE_enum("mode", None, ["MLMC", "MC"], "Running mode: MLMC or MC")
 flags.DEFINE_string("eval_folder",None,"The folder name for storing evaluation results")
 flags.DEFINE_enum("payoff",'images',['images','activations','variance'],"Payoff functions for MLMC")
 flags.DEFINE_list("acc",[],"Accuracies for MLMC")
+flags.DEFINE_float("DDIMeta",0.,"DDIM eta")
 flags.DEFINE_enum('MLMCsampler','EM',['EM','DDIM','TEM','EXPINT','SKROCK'],"Sampler to use for MLMC")
 flags.DEFINE_boolean('adaptive',False,"Use adaptive (EM) sampling")
 flags.mark_flags_as_required(["workdir", "config", "mode","eval_folder"])
 
 def main(argv):
-  print(f'DDIM eta={FLAGS.config.mlmc.DDIM_eta}')
+  print(f'DDIM eta={FLAGS.DDIMeta}')
   if FLAGS.mode == "MLMC":
     # Run the evaluation pipeline
-    MLMC.mlmc_test(FLAGS.config,FLAGS.eval_folder,FLAGS.workdir,FLAGS.payoff,[float(a) for a in FLAGS.acc],FLAGS.MLMCsampler,FLAGS.adaptive,MLMC_=True)
+    MLMC.mlmc_test(FLAGS.config,FLAGS.eval_folder,FLAGS.workdir,FLAGS.payoff,[float(a) for a in FLAGS.acc],
+                   FLAGS.MLMCsampler,FLAGS.adaptive,FLAGS.DDIMeta,MLMC_=True)
   elif FLAGS.mode == "MC":
-    MLMC.mlmc_test(FLAGS.config,FLAGS.eval_folder,FLAGS.workdir,FLAGS.payoff,sampler=FLAGS.MLMCsampler,MLMC_=False)
+    MLMC.mlmc_test(FLAGS.config,FLAGS.eval_folder,FLAGS.workdir,FLAGS.payoff,sampler=FLAGS.MLMCsampler,DDIMeta=FLAGS.DDIMeta,MLMC_=False)
   else:
     raise ValueError(f"Mode {FLAGS.mode} not recognized.")
 
