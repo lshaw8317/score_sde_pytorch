@@ -75,7 +75,7 @@ def activations_payoff(samples,inception_model,inceptionv3,config):
     all_pools=tf.convert_to_tensor(all_pools).numpy()
     return torch.tensor(all_pools) #should have (batch_size, 2048)
 
-def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adaptive=False, MLMC_=True):
+def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adaptive=False, DDIMeta=0.,MLMC_=True):
     torch.cuda.empty_cache()
     tf.keras.backend.clear_session()
     
@@ -138,7 +138,6 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             sqrtalphatm1=sde.sqrt_alphas_cumprod[timestepm1].to(x.device)
             
             return sqrtalphat, sqrtalphatm1
-        DDIMeta=config.mlmc.DDIM_eta
         sampling_eps = 0
         def EIfactor(dt, t):
             #dt<0
