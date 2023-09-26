@@ -184,8 +184,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
     def DDIMSampler(x, t, dt, dW,eta=DDIMeta):
         sat,satm1 = getbetas(x,t[0],dt) #t should be vector of copies of times so just get first element
         stheta=score_fn(x,t)
-        stdt=1.-sat**2
-        stdtm1=1.-satm1**2
+        stdt=np.sqrt(1.-sat**2)
+        stdtm1=np.sqrt(1.-satm1**2)
         b=(sat/satm1)
         x_mean = (1./b)*(x + stdt**2*stheta)-torch.sqrt(stdt**2-eta**2*(1-b**2))*stdtm1*stheta
         x = x_mean + eta * stdtm1*torch.sqrt(1.-b**2)/stdt*dW/torch.sqrt(-dt)
