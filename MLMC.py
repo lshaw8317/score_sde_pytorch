@@ -187,8 +187,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         stdt=torch.sqrt(1.-sat**2)
         stdtm1=torch.sqrt(1.-satm1**2)
         b=(sat/satm1)
-        x_mean = (1./b)*(x + stdt**2*stheta)-torch.sqrt(stdt**2-eta**2*(1-b**2))*stdtm1*stheta
-        x = x_mean + eta * stdtm1*torch.sqrt(1.-b**2)/stdt*dW/torch.sqrt(-dt)
+        x_mean = (1./b)*(x + stdt**2*stheta)-torch.sqrt(stdt**2-eta**2*(1.-b**2))*stdtm1*stheta
+        x = x_mean + eta * (stdtm1/stdt)*torch.sqrt(1.-b**2)*(dW/torch.sqrt(-dt))
         return x, x_mean
     
     if sampler.lower()=='skrock':
@@ -234,7 +234,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                 dWf = torch.randn_like(xf)*torch.sqrt(-dt)
                 dWc+=dWf
                 xf,xf_mean=samplerfun(xf,vec_t,dt,dWf)
-                if i%M==0: #if i is integer multiple of M...
+                if i%M==(M-1): #if i is integer multiple of M...
                     vec_t = torch.ones(bs, device=tc.device,dtype=torch.float32) * tc
                     xc,xc_mean=samplerfun(xc,vec_t,dtc,dWc) #...Develop coarse path
                     dWc=torch.zeros_like(xc) #...Re-initialise coarse BI to 0
