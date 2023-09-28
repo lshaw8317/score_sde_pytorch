@@ -33,7 +33,7 @@ def imagenorm(img):
 fig,_=plt.subplots(2,2)
 markersize=(fig.get_size_inches()[0])
 axis_list=fig.axes
-expdir='cifar10_ddpmpp_continuous_means'
+expdir='exp/eval/cifar10_ddpmpp_continuous_secondmoments'
 switcher= expdir.split('_')[-1]
 label='Testing MLMC Diffusion Models '+ switcher
 
@@ -51,7 +51,7 @@ larr=np.array([int(f.split('_')[-1]) for f in os.listdir(expdir) if f.startswith
 Lmax = 11
 
 if switcher=='means':
-    with np.load('CIFAR10_MCmean.npz') as data:
+    with np.load('exp/eval/CIFAR10_MCmean.npz') as data:
         CIFAR10mean=np.clip(data['mean'],0.,1.)
     fig2,ax=plt.subplots(1,len(files)+1)
     plt.figure(fig2)
@@ -61,7 +61,7 @@ if switcher=='means':
     Lmin=6
     
 elif switcher=='secondmoments':
-    with np.load('CIFAR10_MCmoment2.npz') as data:
+    with np.load('exp/eval/CIFAR10_MCmoment2.npz') as data:
         CIFAR10mean=np.clip(data['mean'],0.,1.)
     fig2,ax=plt.subplots(1,len(files)+1)
     plt.figure(fig2)
@@ -72,7 +72,7 @@ elif switcher=='secondmoments':
     
 elif switcher=='acts':
     actserrs=np.zeros(len(files))
-    with np.load('CIFAR10_MCactsmean.npz') as data:
+    with np.load('exp/eval/CIFAR10_MCactsmean.npz') as data:
         CIFAR10mean=data['mean']
     fig2=plt.figure()
     plt.title('CIFAR10 MC activations error')
@@ -244,7 +244,7 @@ axis_list[2].add_artist(leg)
 indices=np.argsort(acc)
 sortcost_mc=cost_mc[indices]
 sortcost_mlmc=cost_mlmc[indices]
-sortacc=acc[indices]
+sortacc=np.sqrt(realvar+realbias)[indices] #acc[indices]
 
 axis_list[3].plot(PSNR(sortacc),sortcost_mlmc/sortcost_mc,'k:',marker=(8,2,0),markersize=markersize,
              markerfacecolor="None",markeredgecolor='k', markeredgewidth=1,label='Experiment')
