@@ -217,12 +217,12 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
 
         with torch.no_grad():
             xf = sde.prior_sampling((bs,*sampling_shape[-3:])).to(config.device)
-            xc = xf.clone().detach().to(config.device)
+            xc = xf.clone()
             Nf=M**l
             #Nc=M**(l-1) implicitly
             fine_times = torch.linspace(sde.T, sampling_eps,Nf+1, device=xf.device,dtype=torch.float32)
             dWc=torch.zeros_like(xf).to(xc.device)
-            dtc=0.
+            dtc=fine_times[0]*0.
             tc=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
             if saver:
                 saverlist=torch.cat((inverse_scaler(xf)[0][None,None,...],inverse_scaler(xc)[0][None,None,...]),dim=0)
@@ -238,7 +238,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     vec_t = torch.ones(bs, device=tc.device,dtype=torch.float32) * tc
                     xc,xc_mean=samplerfun(xc,vec_t,dtc,dWc) #...Develop coarse path
                     dWc=torch.zeros_like(xc) #...Re-initialise coarse BI to 0
-                    tc=tf_.clone().detach() #coarse solution now advanced to current fine time
+                    tc=tf_.clone() #coarse solution now advanced to current fine time
                     dtc=0.
                     if saver:
                         temp=torch.cat((inverse_scaler(xf)[0][None,...],inverse_scaler(xc)[0][None,...]),dim=0)
