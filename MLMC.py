@@ -239,7 +239,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                 xf,xf_mean=samplerfun(xf,vec_t,dt,dWf)
                 if saver:
                     finelist=torch.cat((finelist,inverse_scaler(xf)[0][None,...].cpu()),dim=0)
-                    finetimes=torch.cat((finetimes,tf_[None,...].cpu()),dim=0)
+                    finetimes=torch.cat((finetimes,tf_[None,None,...].cpu()),dim=0)
             
                 if i%M==(M-1): #if i is integer multiple of M...
                     vec_t = torch.ones(bs, device=tc.device,dtype=torch.float32) * tc
@@ -248,8 +248,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     tc=tf_.clone() #coarse solution now advanced to current fine time
                     dtc=0.
                     if saver:
-                        coarselist=torch.cat((coarselist,inverse_scaler(xc)[0][None,...]),dim=0)
-                        coarsetimes=torch.cat((coarsetimes,tc[None,...].cpu()),dim=0)
+                        coarselist=torch.cat((coarselist,inverse_scaler(xc)[0][None,...].cpu()),dim=0)
+                        coarsetimes=torch.cat((coarsetimes,tc[None,None,...].cpu()),dim=0)
             #if denoise:
             # return inverse_scaler(xf_mean),inverse_scaler(xc_mean)
             #else:
