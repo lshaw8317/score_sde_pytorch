@@ -229,14 +229,15 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                 finelist=inverse_scaler(xf)[0][None,...].cpu()
                 coarsetimes=torch.tensor([sde.T])[None,...].cpu()
                 finetimes=torch.tensor([sde.T])[None,...].cpu()
+            tf_ = fine_times[0]
             for i in range(Nf):
-                tf_ = fine_times[i]
                 dt=fine_times[i+1]-tf_
                 dtc+=dt #running sum of coarse timestep
                 vec_t = torch.ones(bs, device=tf_.device, dtype=torch.float32) * tf_
                 dWf = torch.randn_like(xf)*torch.sqrt(-dt)
                 dWc+=dWf
                 xf,xf_mean=samplerfun(xf,vec_t,dt,dWf)
+                tf_ = fine_times[i+1] #fine solution now advanced to this time
                 if saver:
                     finelist=torch.cat((finelist,inverse_scaler(xf)[0][None,...].cpu()),dim=0)
                     finetimes=torch.cat((finetimes,tf_[None,None,...].cpu()),dim=0)
