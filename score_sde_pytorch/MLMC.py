@@ -203,7 +203,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         print('Setting sampler for MLMC to Euler-Maruyama.')
         samplerfun=EulerMaruyama
     
-    def nonadaptivemlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=False):
+    def nonadaptivemlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=True):
         """ 
         The path function for Euler-Maruyama diffusion, which calculates final samples \sim p(x_0).
     
@@ -225,7 +225,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             dtc=fine_times[0]*0.
             tc=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
             if saver:
-                saverlist=torch.cat((inverse_scaler(xf)[0][None,None,...],inverse_scaler(xc)[0][None,None,...]),dim=0)
+                saverlist=torch.cat((inverse_scaler(xf)[0][None,None,...].cpu(),inverse_scaler(xc)[0][None,None,...].cpu()),dim=0)
             for i in range(Nf):
                 tf_ = fine_times[i]
                 dt=fine_times[i+1]-tf_
@@ -241,7 +241,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     tc=tf_.clone() #coarse solution now advanced to current fine time
                     dtc=0.
                     if saver:
-                        temp=torch.cat((inverse_scaler(xf)[0][None,...],inverse_scaler(xc)[0][None,...]),dim=0)
+                        temp=torch.cat((inverse_scaler(xf)[0][None,...].cpu(),inverse_scaler(xc)[0][None,...].cpu()),dim=0)
                         saverlist=torch.cat((saverlist,temp[None,...]),dim=0)
             #if denoise:
             #    return inverse_scaler(xf_mean),inverse_scaler(xc_mean)
@@ -252,7 +252,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     tf.io.gfile.makedirs(this_sample_dir)
                 with tf.io.gfile.GFile(os.path.join(this_sample_dir, "sample_progression.npz"), "wb") as fout:
                     io_buffer = io.BytesIO()
-                    np.savez_compressed(io_buffer, samples=saverlist)
+                    np.savez_compressed(io_buffer, samples=saverlist.numpy())
                     fout.write(io_buffer.getvalue())
                     
             return inverse_scaler(xf),inverse_scaler(xc)
@@ -285,10 +285,10 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             tc=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
             tf_=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
             if saver:
-                coarselist=inverse_scaler(xc)[0][None,...]
-                finelist=inverse_scaler(xf)[0][None,...]
-                coarsetimes=torch.tensor([sde.T])[None,...]
-                finetimes=torch.tensor([sde.T])[None,...]
+                coarselist=inverse_scaler(xc)[0][None,...].cpu()
+                finelist=inverse_scaler(xf)[0][None,...].cpu()
+                coarsetimes=torch.tensor([sde.T])[None,...].cpu()
+                finetimes=torch.tensor([sde.T])[None,...].cpu()
             
             while t>sampling_eps:
                 told=t
@@ -314,7 +314,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     tf_+=dtf #tf_ should decrease
                     dWf*=0.
                     if saver:
-                        finelist=torch.cat((finelist,inverse_scaler(xf)[0][None,...]),dim=0)
+                        finelist=torch.cat((finelist,inverse_scaler(xf)[0][None,...].cpu()),dim=0)
                         finetimes=torch.cat((finetimes,t[None,...].cpu()),dim=0)
                 
             if saver:
@@ -323,7 +323,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     tf.io.gfile.makedirs(this_sample_dir)
                 with tf.io.gfile.GFile(os.path.join(this_sample_dir, "sample_progression.npz"), "wb") as fout:
                     io_buffer = io.BytesIO()
-                    np.savez_compressed(io_buffer, coarsesamples=coarselist.cpu().numpy(),finesamples=finelist.cpu().numpy(),coarsetimes=coarsetimes.cpu().numpy(),finetimes=finetimes.cpu().numpy())
+                    np.savez_compressed(io_buffer, coarsesamples=coarselist.numpy(),finesamples=finelist.numpy(),coarsetimes=coarsetimes.numpy(),finetimes=finetimes.numpy())
                     fout.write(io_buffer.getvalue())
             
             if denoise:
@@ -494,7 +494,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         M=config.mlmc.M
         N0=config.mlmc.N0
         Lmax=config.mlmc.Lmax
-        Nsamples=config.mlmc.Nsamples
+        Nsamples=100#config.mlmc.Nsamples
         min_l=config.mlmc.min_l
 
         #Variance and mean samples
