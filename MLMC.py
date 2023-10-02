@@ -265,7 +265,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     
             return inverse_scaler(xf),inverse_scaler(xc)
 
-    def adaptivemlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=True):
+    def adaptivemlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=False):
         """ 
         The path function for Euler-Maruyama diffusion, which calculates final samples \sim p(x_0).
     
@@ -279,7 +279,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         def hfunc(x,t):
             _,std=sde.marginal_prob(x,t)
             _,diffusion=sde.sde(x,t)
-            h=(2/diffusion**2)/(1.+2./(std*torch.max(imagenorm(x))))
+            h=(4./diffusion**2)/(1.+2./(std*torch.min(imagenorm(x))))
             return h
         
         with torch.no_grad():

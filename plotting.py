@@ -16,7 +16,7 @@ plt.style.use('seaborn-paper')
 plt.rcParams['figure.dpi'] = 300
 plt.rcParams['savefig.dpi'] = 300
 M=2
-Nsamples=10**3
+Nsamples=100
 
 def PSNR(eps):
     return -20*np.log10(eps)
