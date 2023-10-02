@@ -203,7 +203,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         print('Setting sampler for MLMC to Euler-Maruyama.')
         samplerfun=EulerMaruyama
     
-    def nonadaptivemlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=True):
+    def nonadaptivemlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=False):
         """ 
         The path function for Euler-Maruyama diffusion, which calculates final samples \sim p(x_0).
     
@@ -502,7 +502,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         M=config.mlmc.M
         N0=config.mlmc.N0
         Lmax=config.mlmc.Lmax
-        Nsamples=100#config.mlmc.Nsamples
+        Nsamples=config.mlmc.Nsamples
         min_l=config.mlmc.min_l
 
         #Variance and mean samples
