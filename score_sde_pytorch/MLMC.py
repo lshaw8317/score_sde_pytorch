@@ -518,7 +518,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         #Set mlmc params
         M=config.mlmc.M
         N0=config.mlmc.N0
-        Lmax=config.mlmc.Lmax
+        Lmax = 9 if adaptive else config.mlmc.Lmax
         Nsamples=config.mlmc.Nsamples
         min_l=config.mlmc.min_l
 
