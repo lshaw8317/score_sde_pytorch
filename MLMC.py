@@ -139,7 +139,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             sqrtalphatm1=sde.sqrt_alphas_cumprod[timestepm1].to(x.device)
             
             return sqrtalphat, sqrtalphatm1
-        sampling_eps = 0
+        sampling_eps = 1e-5
         def EIfactor(dt, t):
             #dt<0
             beta_t = sde.beta_0 + (t+.5*dt) * (sde.beta_1 - sde.beta_0)
@@ -266,7 +266,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     
             return inverse_scaler(xf),inverse_scaler(xc),1.*M**l,1.*M**(l-1) #finecost and coarsecost
 
-    def adaptivemlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=False):
+    def adaptivemlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=True):
         """ 
         The path function for Euler-Maruyama diffusion, which calculates final samples \sim p(x_0).
     
