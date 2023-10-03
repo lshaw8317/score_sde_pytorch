@@ -325,7 +325,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     finecost+=1.
                     dtf=-hfunc(xf,tf_)/(M**l)
                     dtf=torch.max(dtf,sampling_eps-t) #dtf negative
-                    if tf+dtf<sampling_eps:
+                    if tf_+dtf<sampling_eps:
                         dtf=.9*sampling_eps-t #fix to stop evaluating at time less than sampling eps
                     tf_+=dtf #tf_ should decrease
                     dWf*=0.
