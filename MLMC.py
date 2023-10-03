@@ -280,7 +280,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         def hfunc(x,t):
             _,std=sde.marginal_prob(x,t)
             _,diffusion=sde.sde(x,t)
-            h=(4./diffusion**2)/(1.+2./(std*torch.min(imagenorm(x))))
+            h=(20./diffusion**2)/(1.+2./(std*torch.min(imagenorm(x))))
             return h
         
         with torch.no_grad():
@@ -312,7 +312,9 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     coarsecost+=1
                     dtc=-hfunc(xc,tc)/(M**(l-1))
                     dtc=torch.max(dtc,sampling_eps-t) #dtc negative
-                    tc+=dtc #tc should decrease
+                    if tc+dtc<sampling_eps:
+                        dtc=.9*sampling_eps-t #fix to stop evaluating at bad time
+                    tc+=dtc
                     dWc*=0.
                     if saver:
                         coarselist=torch.cat((coarselist,inverse_scaler(xc)[0][None,...].cpu()),dim=0)
@@ -323,6 +325,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     finecost+=1.
                     dtf=-hfunc(xf,tf_)/(M**l)
                     dtf=torch.max(dtf,sampling_eps-t) #dtf negative
+                    if tf+dtf<sampling_eps:
+                        dtf=.9*sampling_eps-t #fix to stop evaluating at time less than sampling eps
                     tf_+=dtf #tf_ should decrease
                     dWf*=0.
                     if saver:
