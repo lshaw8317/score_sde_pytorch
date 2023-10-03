@@ -89,6 +89,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
     accsplit=np.sqrt(.5) #default even bias-variance split
     config.model.num_scales=(config.mlmc.M)**(config.mlmc.Lmax)
     gamma_0=1.
+    if adaptive: 
+        config.mlmc.Lmax = 9
     if payoff_arg=='activations':
         print('activations payoff selected for MLMC. Altering config file defaults correspondingly.')
         payoff = lambda samples: activations_payoff(samples, inception_model=inception_model, 
@@ -518,7 +520,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         #Set mlmc params
         M=config.mlmc.M
         N0=config.mlmc.N0
-        Lmax = 9 if adaptive else config.mlmc.Lmax
+        Lmax = config.mlmc.Lmax
         Nsamples=config.mlmc.Nsamples
         min_l=config.mlmc.min_l
 
