@@ -290,11 +290,13 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             xc = xf.clone().detach().to(config.device)
             dWc=torch.zeros_like(xf).to(xc.device)
             dWf=torch.zeros_like(xf).to(xc.device)
-            dtc=torch.zeros(1).to(xc.device)
-            dtf=torch.zeros(1).to(xc.device)
             t=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
-            tc=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
-            tf_=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
+            
+            dtc=-hfunc(xc,t)/(M**(l-1))
+            dtf=-hfunc(xf,t)/(M**l)
+            
+            tc=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)+dtc
+            tf_=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)+dtf
             if saver:
                 coarselist=inverse_scaler(xc)[0][None,...].cpu()
                 finelist=inverse_scaler(xf)[0][None,...].cpu()
@@ -414,7 +416,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                 np.savez_compressed(io_buffer, samplesc=samples_c)
                 fout.write(io_buffer.getvalue())
                 
-        return sums,sqsums, finecost+coarsecost
+        return sums,sqsums, finecost+coarsecost #total cost
     
     ##MLMC function
     def mlmc(accuracy,M=2,N0=10**2,alpha_0=-1,beta_0=-1,gamma_0=-1,min_l=0,Lmax=11,accsplit=accsplit):
@@ -539,7 +541,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             sqsums=torch.zeros((Lmax+1,*sqsums.shape[1:]))
             cost=torch.zeros((Lmax+1,))
             for i,l in enumerate(range(0,Lmax+1)):
-                print(f'l={l}')
+                print(f'l={l}') #total cost
                 sums[i],sqsums[i],cost[i] = looper(Nsamples,l,M,min_l=0)
             means_p=imagenorm(sums[:,1])/Nsamples
             V_p=mom2norm(sqsums[:,1])/Nsamples-means_p**2
@@ -561,7 +563,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                 fout.write(io_buffer.getvalue())
             with tf.io.gfile.GFile(os.path.join(this_sample_dir, "avgcost.pt"), "wb") as fout:
                 io_buffer = io.BytesIO()
-                torch.save(cost,io_buffer)
+                torch.save(cost/Nsamples,io_buffer)
                 fout.write(io_buffer.getvalue())
             
             #Estimate orders of weak (alpha from means) and strong (beta from variance) convergence using LR
