@@ -141,7 +141,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             sqrtalphatm1=sde.sqrt_alphas_cumprod[timestepm1].to(x.device)
             
             return sqrtalphat, sqrtalphatm1
-        sampling_eps = 0
+        sampling_eps = 0.
         def EIfactor(dt, t):
             #dt<0
             beta_t = sde.beta_0 + (t+.5*dt) * (sde.beta_1 - sde.beta_0)
@@ -282,7 +282,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         def hfunc(x,t):
             _,std=sde.marginal_prob(x,t)
             _,diffusion=sde.sde(x,t)
-            h=(20./diffusion**2)/(1.+2./(std*torch.min(imagenorm(x))))
+            h=(4./diffusion**2)/(1.+2./(std*torch.min(imagenorm(x))))
             return h
         
         with torch.no_grad():
@@ -314,7 +314,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     coarsecost+=1
                     dtc=-hfunc(xc,tc)/(M**(l-1))
                     dtc=torch.max(dtc,sampling_eps-t) #dtc negative
-                    if tc+dtc<sampling_eps:
+                    if tc+dtc<1e-5:
                         dtc=.9*sampling_eps-t #fix to stop evaluating at bad time
                     tc+=dtc
                     dWc*=0.
@@ -327,7 +327,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     finecost+=1.
                     dtf=-hfunc(xf,tf_)/(M**l)
                     dtf=torch.max(dtf,sampling_eps-t) #dtf negative
-                    if tf_+dtf<sampling_eps:
+                    if tf_+dtf<1e-5:
                         dtf=.9*sampling_eps-t #fix to stop evaluating at time less than sampling eps
                     tf_+=dtf #tf_ should decrease
                     dWf*=0.
@@ -605,10 +605,10 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             V_p=mom2norm(sqsums[:,1])/N-means_p**2
             means_dp=imagenorm(sums[:,1])/N
 
-            #e^2*cost
-            cost_mlmc=torch.sum(N*cost)*e**2 #cost is number of NFE
+            #cost
+            cost_mlmc=torch.sum(N*cost) #cost is number of NFE
             #TODO: work out effective L for bias cost[-1]=C_0M^L(1+1/M)
-            cost_mc=V_p[-1]*(cost[-1]/(1+1/M))/accsplit**2 #maybe should change this
+            cost_mc=e**(-2)*V_p[-1]*(cost[-1]/(1+1/M))/accsplit**2 #maybe should change this
             
             # Directory to save means, norms and N
             dividerN=N.clone() #add axes to N to broadcast correctly on division
