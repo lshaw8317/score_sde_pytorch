@@ -279,11 +279,11 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         Returns:
             Xf,Xc (numpy.array) : final samples for N_loop sample paths (Xc=X0 if l==0)
         """
-        def hfunc(x,t):
+        def hfunc(x,t,l):
             _,std=sde.marginal_prob(x,t)
             _,diffusion=sde.sde(x,t)
             h=(4./diffusion**2)/(1.+2./(std*torch.min(imagenorm(x))))
-            return h
+            return torch.max(h/M**l,1e-5)
         
         with torch.no_grad():
             xf = sde.prior_sampling((bs,*sampling_shape[-3:])).to(config.device)
@@ -292,8 +292,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             dWf=torch.zeros_like(xf).to(xc.device)
             t=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
             
-            dtc=-hfunc(xc,t)/(M**(l-1))
-            dtf=-hfunc(xf,t)/(M**l)
+            dtc=-hfunc(xc,t,0)
+            dtf=-hfunc(xf,t,0)
             
             tc=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)+dtc
             tf_=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)+dtf
@@ -314,7 +314,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     vec_t = torch.ones(bs, device=xc.device,dtype=torch.float32) * (tc-dtc)
                     xc,xc_mean=samplerfun(xc,vec_t,dtc,dWc) 
                     coarsecost+=1
-                    dtc=-hfunc(xc,tc)/(M**(l-1))
+                    dtc=-hfunc(xc,tc,l-1)
                     dtc=torch.max(dtc,sampling_eps-t) #dtc negative
                     if tc+dtc<1e-5:
                         dtc=.9*sampling_eps-t #fix to stop evaluating at bad time
@@ -327,7 +327,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     vec_t = torch.ones(bs, device=xf.device,dtype=torch.float32) * (tf_-dtf)
                     xf,xf_mean=samplerfun(xf,vec_t,dtf,dWf)
                     finecost+=1.
-                    dtf=-hfunc(xf,tf_)/(M**l)
+                    dtf=-hfunc(xf,tf_,l)
                     dtf=torch.max(dtf,sampling_eps-t) #dtf negative
                     if tf_+dtf<1e-5:
                         dtf=.9*sampling_eps-t #fix to stop evaluating at time less than sampling eps
