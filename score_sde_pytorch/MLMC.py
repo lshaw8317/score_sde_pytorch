@@ -282,8 +282,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         def hfunc(x,t,l):
             _,std=sde.marginal_prob(x,t)
             _,diffusion=sde.sde(x,t)
-            h=(4./diffusion**2)/(1.+2./(std*torch.min(imagenorm(x))))
-            return torch.max(h/M**l,1e-5)
+            h=(4./diffusion**2)/(1.+2./(std*torch.mean(imagenorm(x))))
+            return torch.max(h/M**l,torch.tensor(1e-5))
         
         with torch.no_grad():
             xf = sde.prior_sampling((bs,*sampling_shape[-3:])).to(config.device)
