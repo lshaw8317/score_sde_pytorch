@@ -313,7 +313,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                 if t==tc:#...Develop coarse path
                     vec_t = torch.ones(bs, device=xc.device,dtype=torch.float32) * (tc-dtc)
                     xc,xc_mean=samplerfun(xc,vec_t,dtc,dWc) 
-                    coarsecost+=1
+                    coarsecost+=1.
                     dtc=-hfunc(xc,tc,l-1)
                     dtc=torch.max(dtc,sampling_eps-t) #dtc negative
                     if tc+dtc<1e-5:
@@ -378,10 +378,10 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             if r==0:
                 sums=torch.zeros((3,*fine_payoff.shape[1:])) #skip batch_size
                 sqsums=torch.zeros((4,*fine_payoff.shape[1:]))
-                coarsecost=0.
             sumXf=torch.sum(fine_payoff,axis=0).to('cpu') #sum over batch size
             sumXf2=torch.sum(fine_payoff**2,axis=0).to('cpu')
             if l==min_l:
+                coarsecost=0.
                 sqsums+=torch.stack([sumXf2,sumXf2,torch.zeros_like(sumXf2),torch.zeros_like(sumXf2)])
                 sums+=torch.stack([sumXf,sumXf,torch.zeros_like(sumXf)])
             elif l<min_l:
