@@ -90,7 +90,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
     config.model.num_scales=(config.mlmc.M)**(config.mlmc.Lmax)
     gamma_0=1.
     if adaptive: 
-        config.mlmc.Lmax = 9
+        config.mlmc.Lmax = 8
     if payoff_arg=='activations':
         print('activations payoff selected for MLMC. Altering config file defaults correspondingly.')
         payoff = lambda samples: activations_payoff(samples, inception_model=inception_model, 
@@ -283,7 +283,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             _,std=sde.marginal_prob(x,t)
             _,diffusion=sde.sde(x,t)
             h=(4./diffusion**2)/(1.+2./(std*torch.mean(imagenorm(x))))
-            return torch.max(h.item()/M**l,torch.tensor(1e-5).to(x.device))
+            return torch.max(h/M**l,torch.tensor(1e-5).to(x.device))
         
         with torch.no_grad():
             xf = sde.prior_sampling((bs,*sampling_shape[-3:])).to(config.device)
