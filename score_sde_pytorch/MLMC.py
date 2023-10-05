@@ -164,7 +164,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         drift, diffusion = rsde.sde(x, t)
         x_mean = x + drift * dt
         x = x_mean + diffusion[:, None, None, None] * dW
-        return x, x_mean
+        return x, x_mean, drift
     
     def TamedEulerMaruyama(x, t, dt, dW):
         drift, diffusion = rsde.sde(x, t)
@@ -268,7 +268,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     
             return inverse_scaler(xf),inverse_scaler(xc),1.*M**l,1.*M**(l-1) #finecost and coarsecost
 
-    def adaptivemlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=False):
+    def adaptivemlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=True):
         """ 
         The path function for Euler-Maruyama diffusion, which calculates final samples \sim p(x_0).
     
@@ -298,8 +298,10 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             tc=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)+dtc
             tf_=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)+dtf
             if saver:
-                coarselist=inverse_scaler(xc)[0][None,...].cpu()
-                finelist=inverse_scaler(xf)[0][None,...].cpu()
+                coarselist=torch.tensor([]).cpu()
+                finelist=torch.tensor([]).cpu()
+                driftc=torch.tensor([]).cpu()
+                driftf=torch.tensor([]).cpu()
                 coarsetimes=torch.tensor([sde.T])[None,...].cpu()
                 finetimes=torch.tensor([sde.T])[None,...].cpu()
             coarsecost=0.
@@ -312,7 +314,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                 dWc +=dW
                 if t==tc:#...Develop coarse path
                     vec_t = torch.ones(bs, device=xc.device,dtype=torch.float32) * (tc-dtc)
-                    xc,xc_mean=samplerfun(xc,vec_t,dtc,dWc) 
+                    xc,xc_mean,drift=samplerfun(xc,vec_t,dtc,dWc) 
                     coarsecost+=1.
                     dtc=-hfunc(xc,tc,l-1)
                     dtc=torch.max(dtc,sampling_eps-t) #dtc negative
@@ -321,11 +323,12 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     tc+=dtc
                     dWc*=0.
                     if saver:
-                        coarselist=torch.cat((coarselist,inverse_scaler(xc)[0][None,...].cpu()),dim=0)
+                        coarselist=torch.cat((coarselist,imagenorm(xc).mean().cpu()),dim=0)
+                        driftc=torch.cat((driftc,imagenorm(drift).mean().cpu()),dim=0)
                         coarsetimes=torch.cat((coarsetimes,t[None,...].cpu()),dim=0)
                 if t==tf_:
                     vec_t = torch.ones(bs, device=xf.device,dtype=torch.float32) * (tf_-dtf)
-                    xf,xf_mean=samplerfun(xf,vec_t,dtf,dWf)
+                    xf,xf_mean,drift=samplerfun(xf,vec_t,dtf,dWf)
                     finecost+=1.
                     dtf=-hfunc(xf,tf_,l)
                     dtf=torch.max(dtf,sampling_eps-t) #dtf negative
@@ -334,7 +337,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     tf_+=dtf #tf_ should decrease
                     dWf*=0.
                     if saver:
-                        finelist=torch.cat((finelist,inverse_scaler(xf)[0][None,...].cpu()),dim=0)
+                        finelist=torch.cat((finelist,imagenorm(xf).mean().cpu()),dim=0)
+                        driftf=torch.cat((driftf,imagenorm(drift).mean().cpu()),dim=0)
                         finetimes=torch.cat((finetimes,t[None,...].cpu()),dim=0)
                 
             if saver:
@@ -343,7 +347,9 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     tf.io.gfile.makedirs(this_sample_dir)
                 with tf.io.gfile.GFile(os.path.join(this_sample_dir, "sample_progression.npz"), "wb") as fout:
                     io_buffer = io.BytesIO()
-                    np.savez_compressed(io_buffer, coarsesamples=coarselist.numpy(),finesamples=finelist.numpy(),coarsetimes=coarsetimes.numpy(),finetimes=finetimes.numpy())
+                    np.savez_compressed(io_buffer, coarsesamples=coarselist.numpy(),finesamples=finelist.numpy(),
+                                        coarsetimes=coarsetimes.numpy(),finetimes=finetimes.numpy(),
+                                        driftcoarse=driftc.numpy(),driftfine=driftf.numpy())
                     fout.write(io_buffer.getvalue())
             
             return inverse_scaler(xf),inverse_scaler(xc),finecost,coarsecost
