@@ -164,7 +164,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         drift, diffusion = rsde.sde(x, t)
         x_mean = x + drift * dt
         x = x_mean + diffusion[:, None, None, None] * dW
-        return x, x_mean, drift
+        return x, x_mean
     
     def TamedEulerMaruyama(x, t, dt, dW):
         drift, diffusion = rsde.sde(x, t)
@@ -193,6 +193,13 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         x_mean = (1./b)*(x + stdt**2*stheta)-torch.sqrt(stdt**2-eta**2*(1.-b**2))*stdtm1*stheta
         x = x_mean + eta * (stdtm1/stdt)*torch.sqrt(1.-b**2)*(dW/torch.sqrt(-dt))
         return x, x_mean
+    
+    def adaptiveEulerMaruyama(x, t, dt, dW,drift,diffusion):
+        #dt is negative
+        x_mean = x + drift * dt
+        x = x_mean + diffusion[:, None, None, None] * dW
+        drift, diffusion = rsde.sde(x, t)
+        return x, x_mean, drift,diffusion
     
     if sampler.lower()=='skrock':
         samplerfun=SKROCK
@@ -279,11 +286,9 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         Returns:
             Xf,Xc (numpy.array) : final samples for N_loop sample paths (Xc=X0 if l==0)
         """
-        def hfunc(x,t,l):
-            _,std=sde.marginal_prob(x,t)
-            _,diffusion=sde.sde(x,t)
-            h=(4./diffusion**2)/(1.+2./(std*torch.mean(imagenorm(x))))
-            return torch.max(h/M**l,torch.tensor(1e-5).to(x.device))
+        def hfunc(x,drift,l,eps=.25):
+            h=eps*imagenorm(x)/imagenorm(drift)
+            return h/M**l
         
         with torch.no_grad():
             xf = sde.prior_sampling((bs,*sampling_shape[-3:])).to(config.device)
@@ -291,9 +296,10 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             dWc=torch.zeros_like(xf).to(xc.device)
             dWf=torch.zeros_like(xf).to(xc.device)
             t=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
-            
-            dtc=-hfunc(xc,t,0)
-            dtf=-hfunc(xf,t,0)
+            driftf, diffusionf = rsde.sde(xf, t)
+            driftc, diffusionc = driftf.clone(), diffusionf.clone()
+            dtc=-hfunc(xc,driftc,l-1)
+            dtf=-hfunc(xf,driftf,l)
             
             tc=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)+dtc
             tf_=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)+dtf
@@ -314,9 +320,9 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                 dWc +=dW
                 if t==tc:#...Develop coarse path
                     vec_t = torch.ones(bs, device=xc.device,dtype=torch.float32) * (tc-dtc)
-                    xc,xc_mean,drift=samplerfun(xc,vec_t,dtc,dWc) 
+                    xc,xc_mean,driftc,diffusionc=samplerfun(xc,vec_t,dtc,dWc,driftc,diffusionc) 
                     coarsecost+=1.
-                    dtc=-hfunc(xc,tc,l-1)
+                    dtc=-hfunc(xc,driftc,l-1)
                     dtc=torch.max(dtc,sampling_eps-t) #dtc negative
                     if tc+dtc<1e-5:
                         dtc=.9*sampling_eps-t #fix to stop evaluating at bad time
@@ -324,13 +330,13 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     dWc*=0.
                     if saver:
                         coarselist=torch.cat((coarselist,imagenorm(xc).mean()[None,...].cpu()))
-                        driftc=torch.cat((driftc,imagenorm(drift).mean()[None,...].cpu()))
+                        driftc=torch.cat((driftc,imagenorm(driftc).mean()[None,...].cpu()))
                         coarsetimes=torch.cat((coarsetimes,t[None,...].cpu()))
                 if t==tf_:
                     vec_t = torch.ones(bs, device=xf.device,dtype=torch.float32) * (tf_-dtf)
-                    xf,xf_mean,drift=samplerfun(xf,vec_t,dtf,dWf)
+                    xf,xf_mean,driftf,diffusionf=adaptiveEulerMaruyama(xf,vec_t,dtf,dWf,driftf,diffusionf)
                     finecost+=1.
-                    dtf=-hfunc(xf,tf_,l)
+                    dtf=-hfunc(xf,driftf,l)
                     dtf=torch.max(dtf,sampling_eps-t) #dtf negative
                     if tf_+dtf<1e-5:
                         dtf=.9*sampling_eps-t #fix to stop evaluating at time less than sampling eps
@@ -338,7 +344,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     dWf*=0.
                     if saver:
                         finelist=torch.cat((finelist,imagenorm(xf).mean()[None,...].cpu()))
-                        driftf=torch.cat((driftf,imagenorm(drift).mean()[None,...].cpu()))
+                        driftf=torch.cat((driftf,imagenorm(driftf).mean()[None,...].cpu()))
                         finetimes=torch.cat((finetimes,t[None,...].cpu()))
                 
             if saver:
