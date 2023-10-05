@@ -302,8 +302,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                 finelist=torch.tensor([]).cpu()
                 driftc=torch.tensor([]).cpu()
                 driftf=torch.tensor([]).cpu()
-                coarsetimes=torch.tensor([sde.T])[None,...].cpu()
-                finetimes=torch.tensor([sde.T])[None,...].cpu()
+                coarsetimes=torch.tensor([]).cpu()
+                finetimes=torch.tensor([]).cpu()
             coarsecost=0.
             finecost=0.
             while t>sampling_eps:
@@ -323,9 +323,9 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     tc+=dtc
                     dWc*=0.
                     if saver:
-                        coarselist=torch.cat((coarselist,imagenorm(xc).mean().cpu()),dim=0)
-                        driftc=torch.cat((driftc,imagenorm(drift).mean().cpu()),dim=0)
-                        coarsetimes=torch.cat((coarsetimes,t[None,...].cpu()),dim=0)
+                        coarselist=torch.cat((coarselist,imagenorm(xc).mean()[None,:].cpu()))
+                        driftc=torch.cat((driftc,imagenorm(drift).mean()[None,:].cpu()))
+                        coarsetimes=torch.cat((coarsetimes,t[None,:].cpu()))
                 if t==tf_:
                     vec_t = torch.ones(bs, device=xf.device,dtype=torch.float32) * (tf_-dtf)
                     xf,xf_mean,drift=samplerfun(xf,vec_t,dtf,dWf)
@@ -337,9 +337,9 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     tf_+=dtf #tf_ should decrease
                     dWf*=0.
                     if saver:
-                        finelist=torch.cat((finelist,imagenorm(xf).mean().cpu()),dim=0)
-                        driftf=torch.cat((driftf,imagenorm(drift).mean().cpu()),dim=0)
-                        finetimes=torch.cat((finetimes,t[None,...].cpu()),dim=0)
+                        finelist=torch.cat((finelist,imagenorm(xf).mean()[None,:].cpu()))
+                        driftf=torch.cat((driftf,imagenorm(drift).mean()[None,:].cpu()))
+                        finetimes=torch.cat((finetimes,t[None,:].cpu()))
                 
             if saver:
                 this_sample_dir = os.path.join(eval_dir, f"level_{l}")
