@@ -192,7 +192,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         b=(sat/satm1)
         x_mean = (1./b)*(x + stdt**2*stheta)-torch.sqrt(stdt**2-eta**2*(1.-b**2))*stdtm1*stheta
         x = x_mean + eta * (stdtm1/stdt)*torch.sqrt(1.-b**2)*(dW/torch.sqrt(-dt))
-        return x, x_mean
+        return x, x_mean, stheta
     
     if sampler.lower()=='skrock':
         samplerfun=SKROCK
