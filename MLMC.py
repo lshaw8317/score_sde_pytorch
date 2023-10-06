@@ -286,7 +286,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         Returns:
             Xf,Xc (numpy.array) : final samples for N_loop sample paths (Xc=X0 if l==0)
         """
-        def hfunc(x,drift,l,eps=1.):
+        def hfunc(x,drift,l,eps=.25):
             h=eps*torch.mean(imagenorm(x)/imagenorm(drift))
             return h/M**l
         
@@ -305,12 +305,12 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             tc=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)+dtc
             tf_=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)+dtf
             if saver:
-                coarselist=torch.tensor([]).cpu()
-                finelist=torch.tensor([]).cpu()
-                driftcsaver=torch.tensor([]).cpu()
-                driftfsaver=torch.tensor([]).cpu()
-                coarsetimes=torch.tensor([]).cpu()
-                finetimes=torch.tensor([]).cpu()
+                coarselist=torch.tensor([xc[0]]).cpu()
+                finelist=torch.tensor([xf[0]]).cpu()
+                driftcsaver=torch.tensor([imagenorm(driftc).mean()]).cpu()
+                driftfsaver=torch.tensor([imagenorm(driftf).mean()]).cpu()
+                coarsetimes=torch.tensor([sde.T]).cpu()
+                finetimes=torch.tensor([sde.T]).cpu()
             coarsecost=0.
             finecost=0.
             while t>sampling_eps:
@@ -330,7 +330,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     tc+=dtc
                     dWc*=0.
                     if saver:
-                        coarselist=torch.cat((coarselist,imagenorm(xc).mean()[None,...].cpu()))
+                        coarselist=torch.cat((coarselist,xc[0][None,...].cpu()))
                         driftcsaver=torch.cat((driftcsaver,imagenorm(driftc).mean()[None,...].cpu()))
                         coarsetimes=torch.cat((coarsetimes,t[None,...].cpu()))
                 if t==tf_:
@@ -344,7 +344,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     tf_+=dtf #tf_ should decrease
                     dWf*=0.
                     if saver:
-                        finelist=torch.cat((finelist,imagenorm(xf).mean()[None,...].cpu()))
+                        finelist=torch.cat((finelist,xf[0][None,...].cpu()))
                         driftfsaver=torch.cat((driftfsaver,imagenorm(driftf).mean()[None,...].cpu()))
                         finetimes=torch.cat((finetimes,t[None,...].cpu()))
                 
