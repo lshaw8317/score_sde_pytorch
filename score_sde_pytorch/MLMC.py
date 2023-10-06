@@ -287,7 +287,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             Xf,Xc (numpy.array) : final samples for N_loop sample paths (Xc=X0 if l==0)
         """
         def hfunc(x,drift,l,eps=.25):
-            h=eps*imagenorm(x)/imagenorm(drift)
+            h=eps*torch.mean(imagenorm(x)/imagenorm(drift))
             return h/M**l
         
         with torch.no_grad():
@@ -296,7 +296,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             dWc=torch.zeros_like(xf).to(xc.device)
             dWf=torch.zeros_like(xf).to(xc.device)
             t=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
-            driftf, diffusionf = rsde.sde(xf, t)
+            vec_t = torch.ones(bs, device=xf.device,dtype=torch.float32) * t
+            driftf, diffusionf = rsde.sde(xf, vec_t)
             driftc, diffusionc = driftf.clone(), diffusionf.clone()
             dtc=-hfunc(xc,driftc,l-1)
             dtf=-hfunc(xf,driftf,l)
@@ -304,12 +305,12 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             tc=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)+dtc
             tf_=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)+dtf
             if saver:
-                coarselist=torch.tensor([]).cpu()
-                finelist=torch.tensor([]).cpu()
-                driftc=torch.tensor([]).cpu()
-                driftf=torch.tensor([]).cpu()
-                coarsetimes=torch.tensor([]).cpu()
-                finetimes=torch.tensor([]).cpu()
+                coarselist=torch.tensor([xc[0]]).cpu()
+                finelist=torch.tensor([xf[0]]).cpu()
+                driftcsaver=torch.tensor([imagenorm(driftc).mean()]).cpu()
+                driftfsaver=torch.tensor([imagenorm(driftf).mean()]).cpu()
+                coarsetimes=torch.tensor([sde.T]).cpu()
+                finetimes=torch.tensor([sde.T]).cpu()
             coarsecost=0.
             finecost=0.
             while t>sampling_eps:
@@ -320,7 +321,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                 dWc +=dW
                 if t==tc:#...Develop coarse path
                     vec_t = torch.ones(bs, device=xc.device,dtype=torch.float32) * (tc-dtc)
-                    xc,xc_mean,driftc,diffusionc=samplerfun(xc,vec_t,dtc,dWc,driftc,diffusionc) 
+                    xc,xc_mean,driftc,diffusionc=adaptiveEulerMaruyama(xc,vec_t,dtc,dWc,driftc,diffusionc) 
                     coarsecost+=1.
                     dtc=-hfunc(xc,driftc,l-1)
                     dtc=torch.max(dtc,sampling_eps-t) #dtc negative
@@ -329,8 +330,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     tc+=dtc
                     dWc*=0.
                     if saver:
-                        coarselist=torch.cat((coarselist,imagenorm(xc).mean()[None,...].cpu()))
-                        driftc=torch.cat((driftc,imagenorm(driftc).mean()[None,...].cpu()))
+                        coarselist=torch.cat((coarselist,xc[0][None,...].cpu()))
+                        driftcsaver=torch.cat((driftcsaver,imagenorm(driftc).mean()[None,...].cpu()))
                         coarsetimes=torch.cat((coarsetimes,t[None,...].cpu()))
                 if t==tf_:
                     vec_t = torch.ones(bs, device=xf.device,dtype=torch.float32) * (tf_-dtf)
@@ -343,8 +344,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     tf_+=dtf #tf_ should decrease
                     dWf*=0.
                     if saver:
-                        finelist=torch.cat((finelist,imagenorm(xf).mean()[None,...].cpu()))
-                        driftf=torch.cat((driftf,imagenorm(driftf).mean()[None,...].cpu()))
+                        finelist=torch.cat((finelist,xf[0][None,...].cpu()))
+                        driftfsaver=torch.cat((driftfsaver,imagenorm(driftf).mean()[None,...].cpu()))
                         finetimes=torch.cat((finetimes,t[None,...].cpu()))
                 
             if saver:
@@ -355,7 +356,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     io_buffer = io.BytesIO()
                     np.savez_compressed(io_buffer, coarsesamples=coarselist.numpy(),finesamples=finelist.numpy(),
                                         coarsetimes=coarsetimes.numpy(),finetimes=finetimes.numpy(),
-                                        driftcoarse=driftc.numpy(),driftfine=driftf.numpy())
+                                        driftcoarse=driftcsaver.numpy(),driftfine=driftfsaver.numpy())
                     fout.write(io_buffer.getvalue())
             
             return inverse_scaler(xf),inverse_scaler(xc),finecost,coarsecost
