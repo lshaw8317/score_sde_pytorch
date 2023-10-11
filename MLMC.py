@@ -309,8 +309,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                 finelist=xf[0][None,...].cpu()
                 driftcsaver=torch.tensor([imagenorm(driftc).mean()]).cpu()
                 driftfsaver=torch.tensor([imagenorm(driftf).mean()]).cpu()
-                coarsetimes=torch.tensor([sde.T]).cpu()
-                finetimes=torch.tensor([sde.T]).cpu()
+                coarsetimes=torch.tensor([sde.T])[None,...].cpu()
+                finetimes=torch.tensor([sde.T])[None,...].cpu()
             coarsecost=0.
             finecost=0.
             while t>sampling_eps:
