@@ -305,8 +305,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             tc=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)+dtc
             tf_=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)+dtf
             if saver:
-                coarselist=torch.tensor([xc[0]]).cpu()
-                finelist=torch.tensor([xf[0]]).cpu()
+                coarselist=xc[0][None,...].cpu()
+                finelist=xf[0][None,...].cpu()
                 driftcsaver=torch.tensor([imagenorm(driftc).mean()]).cpu()
                 driftfsaver=torch.tensor([imagenorm(driftf).mean()]).cpu()
                 coarsetimes=torch.tensor([sde.T]).cpu()
