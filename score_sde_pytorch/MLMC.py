@@ -286,7 +286,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         Returns:
             Xf,Xc (numpy.array) : final samples for N_loop sample paths (Xc=X0 if l==0)
         """
-        def hfunc(x,drift,l,eps=.25):
+        def hfunc(x,drift,l,eps=2):
             h=eps*torch.mean(imagenorm(x)/imagenorm(drift))
             return h/M**l
         
