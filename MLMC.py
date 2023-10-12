@@ -214,6 +214,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         samplerfun=ExponentialIntegrator
     elif sampler.lower()=='tem':
         samplerfun=TamedEulerMaruyama
+    elif sampler.lower()=='milstein':
+        samplerfun=Milstein
     elif sampler.lower()=='ddim':
         samplerfun=DDIMSampler
     else:
