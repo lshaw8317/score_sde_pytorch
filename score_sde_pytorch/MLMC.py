@@ -168,7 +168,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
     
     def Milstein(x,t,dt,dW):
         drift, diffusion = rsde.sde(x, t)
-        diff_=19.9 #awful dirty hack, beta_1-beta_0=20-.1
+        diff_=-19.9 #awful dirty hack, beta_1-beta_0=20-.1
         x_mean = x + (drift - diff_*diffusion[:, None, None, None]/2)*dt
         x = x_mean + diffusion[:, None, None, None] * dW + .5*diff_*diffusion[:, None, None, None]*(dW)**2
         return x, x_mean
