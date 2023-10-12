@@ -36,7 +36,7 @@ flags.DEFINE_string("eval_folder",None,"The folder name for storing evaluation r
 flags.DEFINE_enum("payoff",'images',['images','activations','variance'],"Payoff functions for MLMC")
 flags.DEFINE_list("acc",[],"Accuracies for MLMC")
 flags.DEFINE_float("DDIMeta",0.,"DDIM eta")
-flags.DEFINE_enum('MLMCsampler','EM',['EM','DDIM','TEM','EXPINT','SKROCK'],"Sampler to use for MLMC")
+flags.DEFINE_enum('MLMCsampler','EM',['EM','DDIM','TEM','EXPINT','SKROCK','MILSTEIN'],"Sampler to use for MLMC")
 flags.DEFINE_boolean('adaptive',False,"Use adaptive (EM) sampling")
 flags.mark_flags_as_required(["workdir", "config", "mode","eval_folder"])
 
