@@ -157,7 +157,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         raise NotImplementedError(f"SDE {config.training.sde} unknown.")
 
     score_fn=mutils.get_score_fn(sde, model,continuous=config.training.continuous)
-    rsde = sde.reverse(score_fn, probability_flow=False)
+    rsde = sde.reverse(score_fn, probability_flow=True)
     
     def EulerMaruyama(x, t, dt, dW):
         #dt is negative
