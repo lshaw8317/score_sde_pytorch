@@ -146,6 +146,10 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             #dt<0
             beta_t = sde.beta_0 + (t+.5*dt) * (sde.beta_1 - sde.beta_0)
             return torch.exp(.5*(-dt)*beta_t)
+        def std(t):
+            log_mean_coeff = -0.25 * t ** 2 * (sde.beta_1 - sde.beta_0) - 0.5 * t * sde.beta_0
+            std = torch.sqrt(1. - torch.exp(2. * log_mean_coeff))
+            return std
         
     elif config.training.sde.lower() == 'subvpsde':
         sde = sde_lib.subVPSDE(beta_min=config.model.beta_min, beta_max=config.model.beta_max, N=config.model.num_scales)
@@ -186,11 +190,11 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
     def ExponentialIntegrator(x, t, dt, dW):
         #should only work for vpsde
         factor=EIfactor(dt,t)[:, None, None, None]
-        stheta=score_fn(x,t)
-        drift=factor-1.
+        stheta=score_fn(x,t)*std(t)
+        drift=std(t+dt)-std(t)*factor
         noise=torch.zeros_like(dW)
         if not rsde.probability_flow:
-            drift=2*(factor-1.)
+            drift*=2
             noise=torch.sqrt(factor**2-1.)*dW/torch.sqrt(-dt)
         x_mean=factor*x+drift*stheta
         x=x_mean+noise
