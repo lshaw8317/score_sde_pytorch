@@ -157,7 +157,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         raise NotImplementedError(f"SDE {config.training.sde} unknown.")
 
     score_fn=mutils.get_score_fn(sde, model,continuous=config.training.continuous)
-    rsde = sde.reverse(score_fn, probability_flow=False)
+    rsde = sde.reverse(score_fn, probability_flow=True)
     
     def EulerMaruyama(x, t, dt, dW):
         #dt is negative
@@ -187,8 +187,13 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         #should only work for vpsde
         factor=EIfactor(dt,t)[:, None, None, None]
         stheta=score_fn(x,t)
-        x_mean=factor*x+2*(factor-1.)*stheta
-        x=x_mean+torch.sqrt(factor**2-1.)*dW/torch.sqrt(-dt)
+        drift=factor-1.
+        noise=torch.zeros_like(dW)
+        if not rsde.probability_flow:
+            drift=2*(factor-1.)
+            noise=torch.sqrt(factor**2-1.)*dW/torch.sqrt(-dt)
+        x_mean=factor*x+drift*stheta
+        x=x_mean+noise
         return x, x_mean
 
     def DDIMSampler(x, t, dt, dW,eta=DDIMeta):
