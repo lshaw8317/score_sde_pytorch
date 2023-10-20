@@ -599,11 +599,12 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
             print(f'Estimated alpha={alpha}\n Estimated beta={beta}\n Estimated gamma={gamma}\n')
             with open(os.path.join(this_sample_dir, "info_text.txt"),'w') as f:
                 extrastr="continuous" if config.training.continuous else ''
+                pflow="True" if probflow else 'False'
                 f.write(f'Dataset:{config.data.dataset}. Model: {config.model.name}, {extrastr}, {config.training.sde}.\n')
                 f.write(f'Payoff:{payoff_arg}\n')
-                f.write(f'Sampler:{sampler}. DDIM_eta={DDIMeta}. Sampling eps={sampling_eps}.\n')
-                f.write(f'MLMC params: N0={N0}, Lmax={Lmax}, Lmin={Lmin}, Nsamples={Nsamples}, M={M}, accsplit={accsplit}.\n')
-                f.write(f'Estimated alpha={alpha}\n Estimated beta={beta}. Estimated gamma={gamma}. Plotting Lmin=1.')
+                f.write(f'Sampler:{sampler}. Sampling eps={sampling_eps}. Probflow={pflow}\n')
+                f.write(f'MLMC params: Nsamples={Nsamples}, M={M}, accsplit={accsplit}.\n')
+                f.write(f'Estimated alpha={alpha}. Estimated beta={beta}. Estimated gamma={gamma}. Plotting Lmin=0.')
             with tf.io.gfile.GFile(os.path.join(this_sample_dir, "alphabetagamma.pt"), "wb") as fout:
                 io_buffer = io.BytesIO()
                 torch.save(torch.tensor([alpha,beta,gamma]),io_buffer)
@@ -622,7 +623,6 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
             e=acc[i]
             print(f'Performing mlmc for accuracy={e}')
             sums,sqsums,N,cost=mlmc(e,M,alpha_0=alpha_0,beta_0=beta_0,gamma_0=gamma_0,N0=N0,Lmin=Lmin,Lmax=Lmax) #sums=[dX,Xf,Xc], sqsums=[||dX||^2,||Xf||^2,||Xc||^2]
-            L=len(N)-1+Lmin
             means_p=imagenorm(sums[:,1])/N #Norm of mean of fine discretisations
             V_p=mom2norm(sqsums[:,1])/N-means_p**2
             means_dp=imagenorm(sums[:,1])/N
@@ -663,7 +663,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
                 f.write(f'MLMC params:epsilon={e}, alpha={alpha_0}, beta={beta_0}, N0={N0}, Lmax={Lmax}, Lmin={Lmin}, M={M}, accsplit={accsplit}.\n')
             
             meanimg=torch.sum(sums[:,0]/dividerN[:,0,...],axis=0)#cut off one dummy axis
-            if payoff_arg=='images' or payoff_arg=='variance':
+            if payoff_arg=='mean' or payoff_arg=='secondmoment':
                 meanimg=np.clip(meanimg.permute(1, 2, 0).cpu().numpy() * 255., 0, 255).astype(np.uint8)
             # Write samples to disk or Google Cloud Storage
             with tf.io.gfile.GFile(os.path.join(this_sample_dir, "meanpayoff.npz"), "wb") as fout:
@@ -695,7 +695,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
         with open(os.path.join(this_sample_dir, "info_text.txt"),'w') as f:
             extrastr="continuous" if config.training.continuous else ''
             f.write(f'Dataset:{config.data.dataset}. Model: {config.model.name}, {extrastr}, {config.training.sde}. \n')
-            f.write(f'Sampler:{sampler}. DDIM_eta={DDIMeta}. Sampling eps={sampling_eps}.\n')
+            f.write(f'Sampler:{sampler}. Sampling eps={sampling_eps}.\n')
             f.write(f'MC params:L={l}, Nsamples={Nl}, M={M}.')
         num_sampling_rounds = Nl // config.eval.batch_size + 1
         numrem=Nl % config.eval.batch_size
