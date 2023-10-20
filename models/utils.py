@@ -156,7 +156,7 @@ def get_score_fn(sde, model, train=False, continuous=False):
         score = model_fn(x, labels)
         std = sde.sqrt_1m_alphas_cumprod.to(labels.device)[labels.long()]
 
-      score = -score / std[:, None, None, None]
+      # score = -score / std[:, None, None, None] #edit to use eps_theta
       return score
 
   elif isinstance(sde, sde_lib.VESDE):
@@ -168,8 +168,8 @@ def get_score_fn(sde, model, train=False, continuous=False):
         labels = sde.T - t
         labels *= sde.N - 1
         labels = torch.round(labels).long()
-
-      score = model_fn(x, labels)
+      std=sde.marginal_prob(torch.zeros_like(x), t)[1]
+      score = -model_fn(x, labels)*std #edit to use eps_theta
       return score
 
   else:

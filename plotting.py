@@ -16,7 +16,7 @@ plt.style.use('seaborn-paper')
 plt.rcParams['figure.dpi'] = 300
 plt.rcParams['savefig.dpi'] = 300
 M=2
-Nsamples=100
+Nsamples=1000
 
 def PSNR(eps):
     return -20*np.log10(eps)
@@ -33,9 +33,9 @@ def imagenorm(img):
 fig,_=plt.subplots(2,2)
 markersize=(fig.get_size_inches()[0])
 axis_list=fig.axes
-expdir='exp/eval/cifar10_ddpmpp_continuous_secondmoments'
-switcher= expdir.split('_')[-1]
-label='Testing MLMC Diffusion Models '+ switcher
+expdir='exp/eval/cifar10_ExpIntProbFlowRescaled'
+switcher= 'mean' #expdir.split('_')[-1]
+label='CIFAR10 DDIM0 '+ switcher
 
 
 #Do the calculations and simulations for num levels and complexity plot
@@ -49,8 +49,8 @@ cost_mc=np.zeros(len(files))
 plt.rc('axes', titlesize=4)     # fontsize of the axes title
 larr=np.array([int(f.split('_')[-1]) for f in os.listdir(expdir) if f.startswith('level')])
 Lmax = 11
-
-if switcher=='means':
+Lmin=2
+if switcher=='mean':
     with np.load('exp/eval/CIFAR10_MCmean.npz') as data:
         CIFAR10mean=np.clip(data['mean'],0.,1.)
     fig2,ax=plt.subplots(1,len(files)+1)
@@ -58,9 +58,9 @@ if switcher=='means':
     ax[-1].imshow(CIFAR10mean)
     ax[-1].set_title('CIFAR10 MC Mean')
     ax[-1].set_axis_off()
-    Lmin=6
+    Lmin=2
     
-elif switcher=='secondmoments':
+elif switcher=='pw second moment':
     with np.load('exp/eval/CIFAR10_MCmoment2.npz') as data:
         CIFAR10mean=np.clip(data['mean'],0.,1.)
     fig2,ax=plt.subplots(1,len(files)+1)
@@ -68,7 +68,7 @@ elif switcher=='secondmoments':
     ax[-1].imshow(CIFAR10mean)
     ax[-1].set_title('CIFAR10 MC pw second moment')
     ax[-1].set_axis_off()
-    Lmin=6
+    Lmin=2
     
 elif switcher=='acts':
     actserrs=np.zeros(len(files))
@@ -138,7 +138,7 @@ axis_list[0].legend(framealpha=0.6, frameon=True)
 axis_list[0].xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
 #Add estimated beta
 s='$\\beta$ = {}'.format(round(beta,2))
-t = axis_list[0].annotate(s, (.4,.5), xycoords='axes fraction',
+t = axis_list[0].annotate(s, (.6,.5), xycoords='axes fraction',
                           fontsize=markersize,bbox=dict(ec='None',facecolor='None',lw=2))
 
 #Label means plot
@@ -190,7 +190,7 @@ for i,f in enumerate(reversed(files)):
     
     axis_list[2].semilogy(range(Lmin,L+1),N,'k-',marker=i,label=f'{round(PSNR(e),1)}',markersize=markersize,
                    markerfacecolor="None",markeredgecolor='k', markeredgewidth=1)
-    if switcher=='secondmoments' or switcher=='means':
+    if switcher=='pw second moment' or switcher=='mean':
         plt.figure(fig2)
         ax[i].imshow(meanimg/255.)
         reala=imagenorm(torch.tensor(meanimg/255.-CIFAR10mean)[None,...])
@@ -217,7 +217,7 @@ for i,f in enumerate(reversed(files)):
 
 plt.figure(fig2)
 
-if switcher=='means' or switcher=='secondmoments':
+if switcher=='mean' or switcher=='pw second moment':
     ax[-1].set_title(ax[-1].get_title()+f'\n $MSE=\pm {round(Mcerror,4)}$')
 else: #activations
     indices=np.argsort(acc)
@@ -246,10 +246,10 @@ sortcost_mc=cost_mc[indices]
 sortcost_mlmc=cost_mlmc[indices]
 sortacc=np.sqrt(realvar+realbias)[indices] #acc[indices]
 
-axis_list[3].plot(PSNR(sortacc),sortcost_mlmc/sortcost_mc,'k:',marker=(8,2,0),markersize=markersize,
-             markerfacecolor="None",markeredgecolor='k', markeredgewidth=1,label='Experiment')
-axis_list[3].plot(PSNR(theory_epsilon),theory_ratio,'k-',marker=(8,2,0),markersize=markersize,
-              markerfacecolor="None",markeredgecolor='k', markeredgewidth=1,label='Theory')
+axis_list[3].semilogy(PSNR(sortacc),sortcost_mlmc/sortcost_mc,'k:',marker=(8,2,0),markersize=markersize,
+             markerfacecolor="None",markeredgecolor='k', markeredgewidth=1,label='Experiment',base=2)
+axis_list[3].semilogy(PSNR(theory_epsilon),theory_ratio,'k-',marker=(8,2,0),markersize=markersize,
+               markerfacecolor="None",markeredgecolor='k', markeredgewidth=1,label='Theory',base=2)
 axis_list[3].set_xlabel('PSNR')
 axis_list[3].set_ylabel('$C_{MLMC}/C_{MC}$')
 axis_list[3].legend(frameon=True,framealpha=0.6)
