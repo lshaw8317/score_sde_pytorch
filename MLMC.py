@@ -28,10 +28,10 @@ def imagenorm(img):
     return n
 
 def mom2norm(sqsums):
-    #sqsums should have shape L,C,H,W
+    #sqsums should have shape L,C,H,W or L,A for activations                                                                              
     s=sqsums.shape
-    if len(s)!=4:
-        raise Exception('shape of sqsums likely not LHCW')
+    if len(s)==2: #fix for when activations is single dimensional (L,2048) -> (L,1,2048)                                                  
+        sqsums=sqsums[:,None]
     return torch.sum(torch.flatten(sqsums, start_dim=1, end_dim=-1),dim=-1)/np.prod(s[1:])
 
 def activations_payoff(samples,inception_model,inceptionv3,config):
@@ -75,45 +75,40 @@ def activations_payoff(samples,inception_model,inceptionv3,config):
     all_pools=tf.convert_to_tensor(all_pools).numpy()
     return torch.tensor(all_pools) #should have (batch_size, 2048)
 
-def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adaptive=False, DDIMeta=0.,MLMC_=True):
+def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=11,
+              sampler='EM',adaptive=False, probflow=False,MLMC_=True,abg=(-1,-1,-1)):
     torch.cuda.empty_cache()
     tf.keras.backend.clear_session()
     
     # Create data normalizer and its inverse
-    scaler = datasets.get_data_scaler(config)
     inverse_scaler = datasets.get_data_inverse_scaler(config)
     
     # Use inceptionV3 for images with resolution higher than 256.
     inceptionv3 = config.data.image_size >= 256
     inception_model = evaluation.get_inception_model(inceptionv3=inceptionv3)
+    
+    #MLMC algo params
     accsplit=np.sqrt(.5) #default even bias-variance split
+    alpha_0,beta_0,gamma_0=abg
+    config.mlmc.M=M
+    config.mlmc.Lmin=Lmin
+    config.mlmc.Lmax=Lmax
     config.model.num_scales=(config.mlmc.M)**(config.mlmc.Lmax)
-    gamma_0=1.
+
     if adaptive: 
         config.mlmc.Lmax = 8
     if payoff_arg=='activations':
         print('activations payoff selected for MLMC. Altering config file defaults correspondingly.')
-        payoff = lambda samples: activations_payoff(samples, inception_model=inception_model, 
+        payoff = lambda samples: activations_payoff(torch.clip(samples,0.,1.), inception_model=inception_model, 
                                           inceptionv3=inceptionv3, config=config)
-        config.mlmc.min_l=5
         config.eval.batch_size=128
-        config.mlmc.N0=100
         accsplit=np.sqrt(0.01) #since beta<gamma, let error in bias be large and force error onto variance 
-    elif payoff_arg=='variance':
-        print('Pixel-wise variance payoff selected for MLMC. Altering config file defaults correspondingly.')
-        config.mlmc.N0=1000
-        config.mlmc.min_l=7
-        config.eval.batch_size=1800
+    elif payoff_arg=='secondmoment':
+        print('Pixel-wise second moment payoff selected for MLMC.')
         payoff = lambda samples: torch.clip(samples,0.,1.)**2
-        alpha_0=.8
-        beta_0=1.5
-    elif payoff_arg=='images':
-        config.mlmc.N0=1000
-        config.mlmc.min_l=7
-        config.eval.batch_size=1800
-        alpha_0=.8
-        beta_0=1.5
-        print('Setting payoff function to images for MLMC.')
+
+    elif payoff_arg=='mean':
+        print('Setting payoff function to mean image for MLMC.')
         payoff = lambda samples: torch.clip(samples,0.,1.) #default to calculating mean image
     else:
         raise ValueError('payoff_arg not recognised. Should be one of variance, activations, images.')
@@ -132,16 +127,13 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
     sampling_shape = (config.eval.batch_size,
                       config.data.num_channels,
                       config.data.image_size, config.data.image_size)
+    
     if config.training.sde.lower() == 'vpsde':
         sde = sde_lib.VPSDE(beta_min=config.model.beta_min, beta_max=config.model.beta_max, N=config.model.num_scales)
-        def getbetas(x, t, dt):
-            timestep = (t * (sde.N - 1) / sde.T).long()
-            timestepm1 = ((t+dt) * (sde.N - 1) / sde.T).long()
-            sqrtalphat=sde.sqrt_alphas_cumprod[timestep].to(x.device)
-            sqrtalphatm1=sde.sqrt_alphas_cumprod[timestepm1].to(x.device)
-            
-            return sqrtalphat, sqrtalphatm1
         sampling_eps = 0.
+        def diffusion(t):
+            beta_t=sde.beta_0 + t * (sde.beta_1 - sde.beta_0)
+            return torch.sqrt(beta_t)
         def EIfactor(dt, t):
             #dt<0
             beta_t = sde.beta_0 + (t+.5*dt) * (sde.beta_1 - sde.beta_0)
@@ -150,88 +142,85 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             log_mean_coeff = -0.25 * t ** 2 * (sde.beta_1 - sde.beta_0) - 0.5 * t * sde.beta_0
             std = torch.sqrt(1. - torch.exp(2. * log_mean_coeff))
             return std
-        
+            
     elif config.training.sde.lower() == 'subvpsde':
         sde = sde_lib.subVPSDE(beta_min=config.model.beta_min, beta_max=config.model.beta_max, N=config.model.num_scales)
-        sampling_eps = 1e-3
+        sampling_eps = 0.
+        def diffusion(t):
+            return None
+        def EIfactor(dt, t):
+            return None
+        def std(t):
+            return None
+        
     elif config.training.sde.lower() == 'vesde':
         sde = sde_lib.VESDE(sigma_min=config.model.sigma_min, sigma_max=config.model.sigma_max, N=config.model.num_scales)
-        sampling_eps = 1e-5
+        sampling_eps = 0.
+        def diffusion(t):
+            sigma = sde.sigma_min * (sde.sigma_max / sde.sigma_min) ** t
+            diffusion = sigma * torch.sqrt(torch.tensor(2 * (np.log(sde.sigma_max) - np.log(sde.sigma_min)),
+                                                        device=t.device))
+            return diffusion
+        def EIfactor(dt, t):
+            return None
+        def std(t):
+            return None
+        
     else:
-        raise NotImplementedError(f"SDE {config.training.sde} unknown.")
+        raise NotImplementedError(f"SDE {config.training.sde} unknown. Only VPSDE allowed.")
 
     score_fn=mutils.get_score_fn(sde, model,continuous=config.training.continuous)
-    rsde = sde.reverse(score_fn, probability_flow=True)
+    rsde = sde.reverse(score_fn, probability_flow=probflow)
     
     def EulerMaruyama(x, t, dt, dW):
         #dt is negative
-        drift, diffusion = rsde.sde(x, t)
-        x_mean = x + drift * dt
-        x = x_mean + diffusion[:, None, None, None] * dW
-        return x, x_mean
-    
-    def Milstein(x,t,dt,dW):
-        drift, diffusion = rsde.sde(x, t)
-        diff_=-19.9 #awful dirty hack, beta_1-beta_0=20-.1
-        x_mean = x + (drift - diff_*diffusion[:, None, None, None]/2)*dt
-        x = x_mean + diffusion[:, None, None, None] * dW + .5*diff_*diffusion[:, None, None, None]*(dW)**2
+        d=diffusion(t)[:, None, None, None]
+        stheta=-score_fn(x,t)/std(t)
+        x_mean = x - d**2*(stheta+x/2) * dt
+        x = x_mean + d * dW
         return x, x_mean
     
     def TamedEulerMaruyama(x, t, dt, dW):
-        drift, diffusion = rsde.sde(x, t)
+        #dt is negative
+        d=diffusion(t)[:, None, None, None]
+        stheta=-score_fn(x,t)/std(t)
+        drift=-d**2*(stheta+x/2)
         norm_diff=imagenorm(drift)[:,None,None,None]
-        x_mean = x + drift * dt/(1-dt*norm_diff) #dt is negative so -dt=abs(dt)
-        x = x_mean + diffusion[:, None, None, None] * dW
+        x_mean = x + drift * dt/(1.-dt*norm_diff) #dt is negative so -dt=abs(dt)
+        x = x_mean + d * dW
         return x, x_mean
-    
-    def SKROCK(x, t, dt, dW):
-        return 
     
     def ExponentialIntegrator(x, t, dt, dW):
         #should only work for vpsde
         factor=EIfactor(dt,t)[:, None, None, None]
-        stheta=score_fn(x,t)*std(t)
+        stheta=score_fn(x,t)
         drift=std(t+dt)-std(t)*factor
         noise=torch.zeros_like(dW)
         if not rsde.probability_flow:
-            drift*=2
-            noise=torch.sqrt(factor**2-1.)*dW/torch.sqrt(-dt)
+            drift=(std(t+dt)**2/(factor*std(t))-std(t)*factor)*stheta
+            noise=std(t+dt)*torch.sqrt(1.-1./factor**2)/std(t)*dW/torch.sqrt(-dt)
         x_mean=factor*x+drift*stheta
         x=x_mean+noise
         return x, x_mean
-
-    def DDIMSampler(x, t, dt, dW,eta=DDIMeta):
-        sat,satm1 = getbetas(x,t[0],dt) #t should be vector of copies of times so just get first element
-        stheta=score_fn(x,t)
-        stdt=torch.sqrt(1.-sat**2)
-        stdtm1=torch.sqrt(1.-satm1**2)
-        b=(sat/satm1)
-        x_mean = (1./b)*(x + stdt**2*stheta)-torch.sqrt(stdt**2-eta**2*(1.-b**2))*stdtm1*stheta
-        x = x_mean + eta * (stdtm1/stdt)*torch.sqrt(1.-b**2)*(dW/torch.sqrt(-dt))
-        return x, x_mean, stheta
     
     def adaptiveEulerMaruyama(x, t, dt, dW,drift,diffusion):
         #dt is negative
-        x_mean = x + drift * dt
-        x = x_mean + diffusion[:, None, None, None] * dW
-        drift, diffusion = rsde.sde(x, t)
-        return x, x_mean, drift,diffusion
+        d=diffusion(t)[:, None, None, None]
+        stheta=-score_fn(x,t)/std(t)
+        drift=d**2*(stheta+x/2)
+        x_mean = x - drift * dt
+        x = x_mean + d * dW
+        return x, x_mean, drift,d
     
-    if sampler.lower()=='skrock':
-        samplerfun=SKROCK
-    elif sampler.lower()=='expint':
+    if sampler.lower()=='expint':
         samplerfun=ExponentialIntegrator
     elif sampler.lower()=='tem':
         samplerfun=TamedEulerMaruyama
-    elif sampler.lower()=='milstein':
-        samplerfun=Milstein
-    elif sampler.lower()=='ddim':
-        samplerfun=DDIMSampler
     else:
         print('Setting sampler for MLMC to Euler-Maruyama.')
         samplerfun=EulerMaruyama
     
-    def nonadaptivemlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=False):
+    def mlmc_sampler(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,saver=False):
         """ 
         The path function for Euler-Maruyama diffusion, which calculates final samples \sim p(x_0).
     
@@ -279,9 +268,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     if saver:
                         coarselist=torch.cat((coarselist,inverse_scaler(xc)[0][None,...].cpu()),dim=0)
                         coarsetimes=torch.cat((coarsetimes,tc[None,None,...].cpu()),dim=0)
-            #if denoise:
-            # return inverse_scaler(xf_mean),inverse_scaler(xc_mean)
-            #else:
+
             if saver:
                 this_sample_dir = os.path.join(eval_dir, f"level_{l}")
                 if not tf.io.gfile.exists(this_sample_dir):
@@ -293,7 +280,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     
             return inverse_scaler(xf),inverse_scaler(xc),1.*M**l,1.*M**(l-1) #finecost and coarsecost
 
-    def adaptivemlmc_sample(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=True):
+    def adaptivemlmc_sampler(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,denoise=False,saver=True):
         """ 
         The path function for Euler-Maruyama diffusion, which calculates final samples \sim p(x_0).
     
@@ -379,7 +366,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             
             return inverse_scaler(xf),inverse_scaler(xc),finecost,coarsecost
         
-    mlmc_sample = adaptivemlmc_sample if adaptive else nonadaptivemlmc_sample
+    mlmc_sample = adaptivemlmc_sampler if adaptive else mlmc_sampler
 
     def looper(Nl,l,M,min_l=0):
         """ 
@@ -467,9 +454,9 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             N(np.array of ints) : final number of samples at each level
         """
         #Orders of convergence
-        alpha=max(0,alpha_0)
-        beta=max(0,beta_0)
-        
+        alpha=max(0.,alpha_0)
+        beta=max(0.,beta_0)
+        gamma=max(0.,gamma_0)
         L=min_l+1
 
         mylen=L+1-min_l
@@ -490,9 +477,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                         it0_ind=True
                     sqsums[i]+=tempsqsums
                     sums[i]+=tempsums
-                    cost[i]=(c*N[i]+(c-cost[i])*num)/N[i]
+                    cost[i]=(cost[i]*N[i]+c)/(num+N[i])
             
-            sqrt_cost=torch.sqrt(cost) #cost per sample on average at each level
             N+=dN #Increment samples taken counter for each level
             Yl=imagenorm(sums[:,0])/N
             V=torch.clip(mom2norm(sqsums[:,0])/N-(Yl)**2,min=0) #Calculate variance based on updated samples
@@ -510,7 +496,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             alpha_ = max(-a[0]/np.log(M),0.)
             b = torch.lstsq(torch.log(V[1:]),X)[0]
             beta_= -b[0]/np.log(M)
-            g = torch.lstsq(torch.log(sqrt_cost[1:]),X)[0]
+            g = torch.lstsq(torch.log(cost[1:]),X)[0]
             gamma_ = max(g[0]/np.log(M),0.)
             if alpha_0==-1:
                 alpha=alpha_
@@ -521,6 +507,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             
                 
             sqrt_V=torch.sqrt(V)
+            sqrt_cost=torch.sqrt(cost) #cost per sample on average at each level
             Nl_new=torch.ceil(((accsplit*accuracy)**-2)*torch.sum(sqrt_V*sqrt_cost)*(sqrt_V/sqrt_cost)) #Estimate optimal number of samples/level
             dN=torch.clip(Nl_new-N,min=0) #Number of additional samples
             print(f'Estimated std = {torch.sqrt(torch.sum(V/N))}. Estimated bias={Yl[-1]/(M**alpha-1)}')
@@ -536,8 +523,9 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                     #Add extra entries for the new level and estimate sums with N0 samples 
                     V=torch.cat((V,V[-1]*M**(-beta)*torch.ones(1)), dim=0)
                     sqrt_V=torch.sqrt(V)
-                    newcost=torch.tensor([sqrt_cost[-1]*M**gamma])**2
+                    newcost=torch.tensor([cost[-1]*M**gamma])
                     cost=torch.cat((cost,newcost),dim=0)
+                    sqrt_cost=torch.sqrt(cost) #cost per sample on average at each level
                     Nl_new=torch.ceil(((accsplit*accuracy)**-2)*torch.sum(sqrt_V*sqrt_cost)*(sqrt_V/sqrt_cost)) #Estimate optimal number of sample
                     N=torch.cat((N,torch.tensor([0])),dim=0)
                     dN=torch.clip(Nl_new-N,min=0) #Number of additional samples
@@ -558,9 +546,9 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
         min_l=config.mlmc.min_l
 
         #Variance and mean samples
-        tpayoff=payoff(torch.randn(*sampling_shape[1:]))
-        sums=torch.zeros((1,3,*tpayoff.shape))
-        sqsums=torch.zeros((1,4,*tpayoff.shape))
+        tpayoffshape=payoff(torch.randn(*sampling_shape)).shape[1:]
+        sums=torch.zeros((1,3,*tpayoffshape))
+        sqsums=torch.zeros((1,4,*tpayoffshape))
         cost=torch.zeros((1,))
 
         # Directory to save means and norms                          
@@ -574,10 +562,6 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
             for i,l in enumerate(range(0,Lmax+1)):
                 print(f'l={l}') #total cost
                 sums[i],sqsums[i],cost[i] = looper(Nsamples,l,M,min_l=0)
-            means_p=imagenorm(sums[:,1])/Nsamples
-            V_p=mom2norm(sqsums[:,1])/Nsamples-means_p**2
-            means_dp=imagenorm(sums[:,0])/Nsamples
-            V_dp=mom2norm(sqsums[:,0])/Nsamples-means_dp**2  
         
             # Write samples to disk or Google Cloud Storage
             with tf.io.gfile.GFile(os.path.join(this_sample_dir, "averages.pt"), "wb") as fout:
@@ -596,6 +580,11 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],sampler='EM',adap
                 io_buffer = io.BytesIO()
                 torch.save(cost/Nsamples,io_buffer)
                 fout.write(io_buffer.getvalue())
+            
+            means_p=imagenorm(sums[:,1])/Nsamples
+            V_p=mom2norm(sqsums[:,1])/Nsamples-means_p**2
+            means_dp=imagenorm(sums[:,0])/Nsamples
+            V_dp=mom2norm(sqsums[:,0])/Nsamples-means_dp**2  
             
             #Estimate orders of weak (alpha from means) and strong (beta from variance) convergence using LR
             X=np.ones((Lmax,2))

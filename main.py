@@ -33,21 +33,30 @@ config_flags.DEFINE_config_file(
 flags.DEFINE_string("workdir", None, "Work directory.")
 flags.DEFINE_enum("mode", None, ["MLMC", "MC"], "Running mode: MLMC or MC")
 flags.DEFINE_string("eval_folder",None,"The folder name for storing evaluation results")
-flags.DEFINE_enum("payoff",'images',['images','activations','variance'],"Payoff functions for MLMC")
+
+flags.DEFINE_enum("payoff",'mean',['mean','activations','secondmoment'],"Payoff functions for MLMC")
 flags.DEFINE_list("acc",[],"Accuracies for MLMC")
-flags.DEFINE_float("DDIMeta",0.,"DDIM eta")
-flags.DEFINE_enum('MLMCsampler','EM',['EM','DDIM','TEM','EXPINT','SKROCK','MILSTEIN'],"Sampler to use for MLMC")
+flags.DEFINE_list("abg",[-1,-1,-1],"Convergence exponents alpha,beta,gamma")
+flags.DEFINE_float("accsplit",0.,"Bias-variance splitting")
+flags.DEFINE_int("Lmax",11,"Maximum allowed L")
+flags.DEFINE_int("M",2,"Mesh refinement factor")
+flags.DEFINE_int("Lmin",2,"Starting l0")
+flags.DEFINE_enum('MLMCsampler','EXPINT',['EM','TEM','EXPINT'],"Sampler to use for MLMC")
 flags.DEFINE_boolean('adaptive',False,"Use adaptive (EM) sampling")
+flags.DEFINE_boolean('probflow',False,"Use probflow ODE for sampling")
 flags.mark_flags_as_required(["workdir", "config", "mode","eval_folder"])
 
 def main(argv):
-  print(f'DDIM eta={FLAGS.DDIMeta}')
   if FLAGS.mode == "MLMC":
     # Run the evaluation pipeline
-    MLMC.mlmc_test(FLAGS.config,FLAGS.eval_folder,FLAGS.workdir,FLAGS.payoff,[float(a) for a in FLAGS.acc],
-                   FLAGS.MLMCsampler,FLAGS.adaptive,FLAGS.DDIMeta,MLMC_=True)
+    MLMC.mlmc_test(FLAGS.config,FLAGS.eval_folder,FLAGS.workdir,FLAGS.payoff,
+                   [float(a) for a in FLAGS.acc],FLAGS.M,FLAGS.Lmin,FLAGS.Lmax,
+                   FLAGS.MLMCsampler,FLAGS.adaptive,FLAGS.probflow,MLMC_=True,
+                   abg=(float(a) for a in FLAGS.abg))
   elif FLAGS.mode == "MC":
-    MLMC.mlmc_test(FLAGS.config,FLAGS.eval_folder,FLAGS.workdir,FLAGS.payoff,sampler=FLAGS.MLMCsampler,DDIMeta=FLAGS.DDIMeta,MLMC_=False)
+    MLMC.mlmc_test(FLAGS.config,FLAGS.eval_folder,FLAGS.workdir,FLAGS.payoff,
+                   M=FLAGS.M,Lmax=FLAGS.Lmax,sampler=FLAGS.MLMCsampler,
+                   adaptive=FLAGS.adaptive,probflow=FLAGS.probflow,MLMC_=False)
   else:
     raise ValueError(f"Mode {FLAGS.mode} not recognized.")
 
