@@ -72,10 +72,11 @@ for expdir in ['exp/eval/cifar10mean_DDIM0',
     b = np.linalg.lstsq(X,np.log(V_dp[1:]),rcond=None)[0]
     beta = -b[0]/np.log(M)
     
-    with open(os.path.join(this_sample_dir, "info_text.txt"),'a') as f:
-        f.write(f'Estimated Y0={Y0}. Estimated Lmin={cutoff}.')
+#    with open(os.path.join(this_sample_dir, "info_text.txt"),'a') as f:
+ #       f.write(f'Estimated Y0={Y0}. Estimated Lmin={cutoff}.')
     
     with tf.io.gfile.GFile(os.path.join(this_sample_dir, "alphabetagamma.pt"), "wb") as fout:
         io_buffer = io.BytesIO()
-        torch.save(torch.tensor([alpha,beta,1.,Y0,cutoff]),io_buffer)
+        print(alpha,beta,1.,Y0,cutoff)
+        torch.save(torch.tensor([alpha,beta,1.,Y0,cutoff.item()]),io_buffer)
         fout.write(io_buffer.getvalue())
