@@ -193,12 +193,14 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
     def ExponentialIntegrator(x, t, dt, dW):
         #should only work for vpsde
         factor=EIfactor(dt,t)[:, None, None, None]
+        stdt=std(t)
+        stdtm1=std(t+dt)
         stheta=score_fn(x,t)
-        drift=std(t+dt)-std(t)*factor
+        drift=stdtm1-stdt*factor
         noise=torch.zeros_like(dW)
-        if not rsde.probability_flow:
-            drift=(std(t+dt)**2/(factor*std(t))-std(t)*factor)*stheta
-            noise=std(t+dt)*torch.sqrt(1.-1./factor**2)/std(t)*dW/torch.sqrt(-dt)
+        if not probflow:
+            drift=(stdtm1**2/(factor*stdt)-stdt*factor)
+            noise=stdtm1*torch.sqrt(1.-1./factor**2)/stdt*dW/torch.sqrt(-dt)
         x_mean=factor*x+drift*stheta
         x=x_mean+noise
         return x, x_mean
@@ -587,12 +589,20 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
             V_dp=mom2norm(sqsums[:,0])/Nsamples-means_dp**2  
             
             #Estimate orders of weak (alpha from means) and strong (beta from variance) convergence using LR
-            X=np.ones((Lmax,2))
+            cutoff=np.argmax(V_dp<(np.sqrt(M)-1.)**2*V_p[-1]/(1+M))-1 #index of optimal lmin 
+            means_p=means_p[cutoff:]
+            V_p=V_p[cutoff:]
+            means_dp=means_dp[cutoff:]
+            V_dp=V_dp[cutoff:]
+            
+            X=np.ones((Lmax-cutoff+1,2))
             X[:,0]=np.arange(1,Lmax+1)
             a = np.linalg.lstsq(X,np.log(means_dp[1:]),rcond=None)[0]
             alpha = -a[0]/np.log(M)
+            Y0=np.exp(a[1])
             b = np.linalg.lstsq(X,np.log(V_dp[1:]),rcond=None)[0]
             beta = -b[0]/np.log(M) 
+            X=np.ones((Lmax,2))
             g = np.linalg.lstsq(X,np.log(cost[1:]),rcond=None)[0]
             gamma = g[0]/np.log(M) 
 
@@ -604,10 +614,10 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
                 f.write(f'Payoff:{payoff_arg}\n')
                 f.write(f'Sampler:{sampler}. Sampling eps={sampling_eps}. Probflow={pflow}\n')
                 f.write(f'MLMC params: Nsamples={Nsamples}, M={M}, accsplit={accsplit}.\n')
-                f.write(f'Estimated alpha={alpha}. Estimated beta={beta}. Estimated gamma={gamma}. Plotting Lmin=0.')
+                f.write(f'Estimated alpha={alpha}. Estimated beta={beta}. Estimated gamma={gamma}. Estimated Y0={Y0}. Estimated Lmin={cutoff}.')
             with tf.io.gfile.GFile(os.path.join(this_sample_dir, "alphabetagamma.pt"), "wb") as fout:
                 io_buffer = io.BytesIO()
-                torch.save(torch.tensor([alpha,beta,gamma]),io_buffer)
+                torch.save(torch.tensor([alpha,beta,gamma,Y0]),io_buffer)
                 fout.write(io_buffer.getvalue())
                 
         with open(os.path.join(this_sample_dir, "alphabetagamma.pt"),'rb') as f:
@@ -615,10 +625,14 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
             alpha=temp[0].item()
             beta=temp[1].item()
             gamma=temp[2].item()
+            Y0=temp[3].item()
         
         #Do the calculations and simulations for num levels and complexity plot
         sums=torch.zeros((Lmax+1-Lmin,*sums.shape[1:]))
         sqsums=torch.zeros((Lmax+1-Lmin,*sqsums.shape[1:]))
+        accsplitdir = os.path.join(eval_dir, f"accsplit_{accsplit}")
+        if not tf.io.gfile.exists(accsplitdir):
+            tf.io.gfile.makedirs(accsplitdir)
         for i in range(len(acc)):
             e=acc[i]
             print(f'Performing mlmc for accuracy={e}')
@@ -629,14 +643,14 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
 
             #cost
             cost_mlmc=torch.sum(N*cost) #cost is number of NFE
-            #TODO: work out effective L for bias cost[-1]=C_0M^L(1+1/M)
-            cost_mc=e**(-2)*V_p[-1]*(cost[-1]/(1+1/M))/accsplit**2 #maybe should change this
+            #TODO: assumes alpha=1
+            cost_mc=Y0*e**(-3)*V_p[-1]*1.5*torch.sqrt(3) #maybe should change this
             
             # Directory to save means, norms and N
             dividerN=N.clone() #add axes to N to broadcast correctly on division
             for i in range(len(sums.shape[1:])):
                 dividerN.unsqueeze_(-1)
-            this_sample_dir = os.path.join(eval_dir, f"M_{M}_accuracy_{e}")
+            this_sample_dir = os.path.join(accsplitdir, f"M_{M}_accuracy_{e}")
             
             if not tf.io.gfile.exists(this_sample_dir):
                 tf.io.gfile.makedirs(this_sample_dir)        
