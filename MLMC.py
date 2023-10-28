@@ -35,7 +35,7 @@ def mom2norm(sqsums):
     return torch.sum(torch.flatten(sqsums, start_dim=1, end_dim=-1),dim=-1)/np.prod(s[1:])
 
 def activations_payoff(samples,inception_model,inceptionv3,config):
-    samples=tf.convert_to_tensor(np.clip(samples.permute(0, 2, 3, 1).cpu().numpy() * 255., 0, 255).astype(np.uint8))
+    samples=samples.permute(0, 2, 3, 1).cpu().numpy()*255.
     # Force garbage collection before calling TensorFlow code for Inception network
     gc.collect()
     latents = evaluation.run_inception_distributed(samples, inception_model, inceptionv3=inceptionv3)
@@ -102,12 +102,16 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
         payoff = lambda samples: activations_payoff(torch.clip(samples,0.,1.), inception_model=inception_model, 
                                           inceptionv3=inceptionv3, config=config)
         config.eval.batch_size=128
-        accsplit=np.sqrt(0.01) #since beta<gamma, let error in bias be large and force error onto variance 
+        accsplit=np.sqrt(0.5) #since beta<gamma, let error in bias be large and force error onto variance 
     elif payoff_arg=='secondmoment':
+        config.mlmc.N0=100
         print('Pixel-wise second moment payoff selected for MLMC.')
         payoff = lambda samples: torch.clip(samples,0.,1.)**2
-
+        config.eval.batch_size=1600
     elif payoff_arg=='mean':
+        config.mlmc.N0=100
+        accsplit=np.sqrt(.97)
+        config.eval.batch_size=2000
         print('Setting payoff function to mean image for MLMC.')
         payoff = lambda samples: torch.clip(samples,0.,1.) #default to calculating mean image
     else:
@@ -181,25 +185,17 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
         x = x_mean + d * dW
         return x, x_mean
     
-    def TamedEulerMaruyama(x, t, dt, dW):
-        #dt is negative
-        d=diffusion(t)[:, None, None, None]
-        stheta=-score_fn(x,t)/std(t)
-        drift=-d**2*(stheta+x/2)
-        norm_diff=imagenorm(drift)[:,None,None,None]
-        x_mean = x + drift * dt/(1.-dt*norm_diff) #dt is negative so -dt=abs(dt)
-        x = x_mean + d * dW
-        return x, x_mean
-    
     def ExponentialIntegrator(x, t, dt, dW):
         #should only work for vpsde
         factor=EIfactor(dt,t)[:, None, None, None]
+        stdt=std(t)
+        stdtm1=std(t+dt)
         stheta=score_fn(x,t)
-        drift=std(t+dt)-std(t)*factor
+        drift=stdtm1-stdt*factor
         noise=torch.zeros_like(dW)
-        if not rsde.probability_flow:
-            drift=(std(t+dt)**2/(factor*std(t))-std(t)*factor)*stheta
-            noise=std(t+dt)*torch.sqrt(1.-1./factor**2)/std(t)*dW/torch.sqrt(-dt)
+        if not probflow:
+            drift=(stdtm1**2/(factor*stdt)-stdt*factor)
+            noise=stdtm1*torch.sqrt(1.-1./factor**2)/stdt*dW/torch.sqrt(-dt)
         x_mean=factor*x+drift*stheta
         x=x_mean+noise
         return x, x_mean
@@ -621,6 +617,9 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
         #Do the calculations and simulations for num levels and complexity plot
         sums=torch.zeros((Lmax+1-Lmin,*sums.shape[1:]))
         sqsums=torch.zeros((Lmax+1-Lmin,*sqsums.shape[1:]))
+        accsplitdir = os.path.join(eval_dir, f"accsplit_{accsplit}")
+        if not tf.io.gfile.exists(accsplitdir):
+            tf.io.gfile.makedirs(accsplitdir)
         for i in range(len(acc)):
             e=acc[i]
             print(f'Performing mlmc for accuracy={e}')
@@ -638,7 +637,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
             dividerN=N.clone() #add axes to N to broadcast correctly on division
             for i in range(len(sums.shape[1:])):
                 dividerN.unsqueeze_(-1)
-            this_sample_dir = os.path.join(eval_dir, f"M_{M}_accuracy_{e}")
+            this_sample_dir = os.path.join(accsplitdir, f"M_{M}_accuracy_{e}")
             
             if not tf.io.gfile.exists(this_sample_dir):
                 tf.io.gfile.makedirs(this_sample_dir)        

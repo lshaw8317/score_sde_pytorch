@@ -90,6 +90,7 @@ def classifier_fn_from_tfhub(output_fields, inception_model,
 
   return _classifier_fn
 
+@tf.function
 def run_inception_jit(inputs,
                       inception_model,
                       num_batches=1,
@@ -106,6 +107,7 @@ def run_inception_jit(inputs,
     classifier_fn=classifier_fn_from_tfhub(None, inception_model),
     dtypes=_DEFAULT_DTYPES)
 
+@tf.function
 def run_inception_distributed(input_tensor,
                               inception_model,
                               num_batches=1,
