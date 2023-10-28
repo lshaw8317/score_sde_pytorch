@@ -632,15 +632,16 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
         for i in range(len(acc)):
             e=acc[i]
             print(f'Performing mlmc for accuracy={e}')
-            sums,sqsums,N,cost=mlmc(e,M,alpha_0=alpha_0,beta_0=beta_0,gamma_0=gamma_0,N0=N0,Lmin=Lmin,Lmax=Lmax) #sums=[dX,Xf,Xc], sqsums=[||dX||^2,||Xf||^2,||Xc||^2]
+            sums,sqsums,N,cost=mlmc(e,M,alpha_0=alpha,beta_0=beta,gamma_0=gamma,N0=N0,Lmin=Lmin,Lmax=Lmax) #sums=[dX,Xf,Xc], sqsums=[||dX||^2,||Xf||^2,||Xc||^2]
             means_p=imagenorm(sums[:,1])/N #Norm of mean of fine discretisations
             V_p=mom2norm(sqsums[:,1])/N-means_p**2
             means_dp=imagenorm(sums[:,1])/N
 
             #cost
             cost_mlmc=torch.sum(N*cost) #cost is number of NFE
-            #TODO: assumes alpha=1
-            cost_mc=Y0*e**(-3)*V_p[-1]*1.5*torch.sqrt(3) #maybe should change this
+            #Optimise MC cost
+            K2=((M**alpha-1)/Y0)**(-1/alpha)
+            cost_mc=K2*e**(-2-1/alpha)*V_p[-1]*(2*alpha+1)**(1+.5/alpha)/(2*alpha) #maybe should change this
             
             # Directory to save means, norms and N
             dividerN=N.clone() #add axes to N to broadcast correctly on division
