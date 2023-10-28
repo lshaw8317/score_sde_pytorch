@@ -621,7 +621,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
             beta=temp[1].item()
             gamma=temp[2].item()
             Y0=temp[3].item()
-            Lmin=int(temp[3].item())
+            Lmin=int(temp[3])
+            print(alpha,beta,gamma,Y0,cutoff)
         
         #Do the calculations and simulations for num levels and complexity plot
         sums=torch.zeros((Lmax+1-Lmin,*sums.shape[1:]))
