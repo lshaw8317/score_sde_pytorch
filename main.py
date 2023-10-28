@@ -43,7 +43,7 @@ flags.DEFINE_integer("Lmin",2,"Starting l0")
 flags.DEFINE_enum('MLMCsampler','EXPINT',['EM','TEM','EXPINT'],"Sampler to use for MLMC")
 flags.DEFINE_boolean('adaptive',False,"Use adaptive (EM) sampling")
 flags.DEFINE_boolean('probflow',False,"Use probflow ODE for sampling")
-flags.DEFINE_float("accsplit",torch.sqrt(.5).numpy(),"accsplit for var-bias split")
+flags.DEFINE_float("accsplit",1./1.41,"accsplit for var-bias split")
 
 flags.mark_flags_as_required(["workdir", "config", "mode","eval_folder"])
 
