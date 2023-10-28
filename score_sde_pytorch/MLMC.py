@@ -545,7 +545,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
         N0=config.mlmc.N0
         Lmax = config.mlmc.Lmax
         Nsamples=config.mlmc.Nsamples
-        Lmin=config.mlmc.Lmin
+        # Lmin=config.mlmc.Lmin
 
         #Variance and mean samples
         tpayoffshape=payoff(torch.randn(*sampling_shape)).shape[1:]
@@ -617,7 +617,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
                 f.write(f'Estimated alpha={alpha}. Estimated beta={beta}. Estimated gamma={gamma}. Estimated Y0={Y0}. Estimated Lmin={cutoff}.')
             with tf.io.gfile.GFile(os.path.join(this_sample_dir, "alphabetagamma.pt"), "wb") as fout:
                 io_buffer = io.BytesIO()
-                torch.save(torch.tensor([alpha,beta,gamma,Y0]),io_buffer)
+                torch.save(torch.tensor([alpha,beta,gamma,Y0,cutoff]),io_buffer)
                 fout.write(io_buffer.getvalue())
                 
         with open(os.path.join(this_sample_dir, "alphabetagamma.pt"),'rb') as f:
@@ -626,6 +626,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
             beta=temp[1].item()
             gamma=temp[2].item()
             Y0=temp[3].item()
+            Lmin=temp[3].item()
         
         #Do the calculations and simulations for num levels and complexity plot
         sums=torch.zeros((Lmax+1-Lmin,*sums.shape[1:]))
