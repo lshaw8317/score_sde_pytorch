@@ -75,7 +75,7 @@ def activations_payoff(samples,inception_model,inceptionv3,config):
     all_pools=tf.convert_to_tensor(all_pools).numpy()
     return torch.tensor(all_pools) #should have (batch_size, 2048)
 
-def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=11,
+def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=11,accsplit=np.sqrt(.5),
               sampler='EM',adaptive=False, probflow=False,MLMC_=True,abg=(-1,-1,-1)):
     torch.cuda.empty_cache()
     tf.keras.backend.clear_session()
@@ -88,7 +88,6 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
     inception_model = evaluation.get_inception_model(inceptionv3=inceptionv3)
     
     #MLMC algo params
-    accsplit=np.sqrt(.5) #default even bias-variance split
     alpha_0,beta_0,gamma_0=abg
     config.mlmc.M=M
     config.mlmc.Lmin=Lmin
@@ -626,7 +625,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
             beta=temp[1].item()
             gamma=temp[2].item()
             Y0=temp[3].item()
-            Lmin=temp[3].item()
+            Lmin=int(temp[3].item())
         
         #Do the calculations and simulations for num levels and complexity plot
         sums=torch.zeros((Lmax+1-Lmin,*sums.shape[1:]))
