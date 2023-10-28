@@ -43,6 +43,8 @@ flags.DEFINE_integer("Lmin",2,"Starting l0")
 flags.DEFINE_enum('MLMCsampler','EXPINT',['EM','TEM','EXPINT'],"Sampler to use for MLMC")
 flags.DEFINE_boolean('adaptive',False,"Use adaptive (EM) sampling")
 flags.DEFINE_boolean('probflow',False,"Use probflow ODE for sampling")
+flags.DEFINE_float("accsplit",torch.sqrt(.5).numpy(),"accsplit for var-bias split")
+
 flags.mark_flags_as_required(["workdir", "config", "mode","eval_folder"])
 
 def main(argv):
@@ -50,7 +52,7 @@ def main(argv):
     # Run the evaluation pipeline
     MLMC.mlmc_test(FLAGS.config,FLAGS.eval_folder,FLAGS.workdir,FLAGS.payoff,
                    [float(a) for a in FLAGS.acc],FLAGS.M,FLAGS.Lmin,FLAGS.Lmax,
-                   FLAGS.MLMCsampler,FLAGS.adaptive,FLAGS.probflow,MLMC_=True,
+                   FLAGS.MLMCsampler,FLAGS.adaptive,FLAGS.probflow,MLMC_=True,accsplit=FLAGS.accsplit,
                    abg=(float(a) for a in FLAGS.abg))
   elif FLAGS.mode == "MC":
     MLMC.mlmc_test(FLAGS.config,FLAGS.eval_folder,FLAGS.workdir,FLAGS.payoff,
