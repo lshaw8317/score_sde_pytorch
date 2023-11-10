@@ -26,6 +26,8 @@ import os
 import torch
 import tensorflow as tf
 import MLMC
+from easydict import EasyDict as edict
+
 FLAGS = flags.FLAGS
 
 config_flags.DEFINE_config_file(
@@ -44,17 +46,36 @@ flags.DEFINE_enum('MLMCsampler','EXPINT',['EM','TEM','EXPINT'],"Sampler to use f
 flags.DEFINE_boolean('adaptive',False,"Use adaptive (EM) sampling")
 flags.DEFINE_boolean('probflow',False,"Use probflow ODE for sampling")
 flags.DEFINE_float("accsplit",1./1.41,"accsplit for var-bias split")
+flags.DEFINE_boolean("conditional",False,"Denoising problem")
+flags.DEFINE_float("conditional_noise",.4,"Denoising problem noise")
 
 flags.mark_flags_as_required(["workdir", "config", "mode","eval_folder"])
 
 def main(argv):
+  if FLAGS.conditional:
+    from torchvision.datasets import CIFAR10
+    #Load an image from the Cifar10 dataset                                                                                                                 
+    x0 = CIFAR10(root='./data', train=True, download=True).__get_item__(42)/255.
+    torch.seed(42)
+    v=x0+FLAGS.conditional_noise*torch.randn_like(x0)
+    denoisedir=os.path.join(FLAGS.eval_folder,f'Denoising_{FLAGS.conditional_noise}')
+    os.mkdir(denoisedir)
+    with open(os.path.join(denoisedir, "x0.pt"), "wb") as f:
+      torch.save(x0.cpu(),f)
+    with open(os.path.join(denoisedir, "v.pt"), "wb") as f:
+      torch.save(v.cpu(),f) 
+    conditional=edict(obsV=v,noise=FLAGS.conditional_noise)
+  else:
+    conditional=None
+
+
   if FLAGS.mode == "MLMC":
     print(FLAGS.accsplit)
     # Run the evaluation pipeline
     MLMC.mlmc_test(FLAGS.config,FLAGS.eval_folder,FLAGS.workdir,FLAGS.payoff,
                    [float(a) for a in FLAGS.acc],FLAGS.M,FLAGS.Lmin,FLAGS.Lmax,
                    FLAGS.MLMCsampler,FLAGS.adaptive,FLAGS.probflow,MLMC_=True,accsplit=FLAGS.accsplit,
-                   abg=(float(a) for a in FLAGS.abg))
+                   abg=(float(a) for a in FLAGS.abg),conditional=conditional)
   elif FLAGS.mode == "MC":
     MLMC.mlmc_test(FLAGS.config,FLAGS.eval_folder,FLAGS.workdir,FLAGS.payoff,
                    M=FLAGS.M,Lmax=FLAGS.Lmax,sampler=FLAGS.MLMCsampler,
