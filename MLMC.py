@@ -109,8 +109,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
         config.eval.batch_size=1600
     elif payoff_arg=='mean':
         config.mlmc.N0=100
-        accsplit=np.sqrt(.97)
-        config.eval.batch_size=2000
+        config.eval.batch_size=1500
         print('Setting payoff function to mean image for MLMC.')
         payoff = lambda samples: torch.clip(samples,0.,1.) #default to calculating mean image
     else:
@@ -621,8 +620,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
             beta=temp[1].item()
             gamma=temp[2].item()
             Y0=temp[3].item()
-            Lmin=int(temp[3])
-            print(alpha,beta,gamma,Y0,cutoff)
+            Lmin=int(temp[4])
+            print(alpha,beta,gamma,Y0,Lmin)
         
         #Do the calculations and simulations for num levels and complexity plot
         sums=torch.zeros((Lmax+1-Lmin,*sums.shape[1:]))
