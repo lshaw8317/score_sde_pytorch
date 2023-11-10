@@ -76,7 +76,8 @@ def activations_payoff(samples,inception_model,inceptionv3,config):
     return torch.tensor(all_pools) #should have (batch_size, 2048)
 
 def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=11,
-              sampler='EM',adaptive=False, probflow=False,MLMC_=True,abg=(-1,-1,-1),accsplit=np.sqrt(.5)):
+              sampler='EM',adaptive=False, probflow=False,MLMC_=True,abg=(-1,-1,-1),
+              accsplit=np.sqrt(.5),conditional=None):
     torch.cuda.empty_cache()
     tf.keras.backend.clear_session()
     
@@ -101,7 +102,6 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
         payoff = lambda samples: activations_payoff(torch.clip(samples,0.,1.), inception_model=inception_model, 
                                           inceptionv3=inceptionv3, config=config)
         config.eval.batch_size=128
-        accsplit=np.sqrt(0.5) #since beta<gamma, let error in bias be large and force error onto variance 
     elif payoff_arg=='secondmoment':
         config.mlmc.N0=100
         print('Pixel-wise second moment payoff selected for MLMC.')
@@ -145,7 +145,25 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
             log_mean_coeff = -0.25 * t_ ** 2 * (sde.beta_1 - sde.beta_0) - 0.5 * t_ * sde.beta_0
             std = torch.sqrt(1. - torch.exp(2. * log_mean_coeff))
             return std
-            
+        if conditional is not None:
+            obsT=conditional.obsT
+            def CondFactor(t,s):
+                #(1/2)int_t^s beta_0 + (beta_1-beta_0)*t
+                beta_t = sde.beta_0 + .5*(t+s) * (sde.beta_1 - sde.beta_0)
+                return .5*(beta_t)*(s-t)
+            def condterm1(stdT,stdt,stdtm1,cfTtm1,cfTt):
+                return (stdtm1/stdt)*torch.sinh(torch.log(stdT/stdt)+cfTt)/(torch.sinh(torch.log(stdT/stdtm1)+cfTtm1))
+            def condterm2(stdT,stdt,stdtm1,cfTtm1,cfttm1):
+                return .5*(stdtm1/stdT)*(stdtm1**2-stdt**2-2*cfttm1)/(torch.sinh(torch.log(stdT/stdtm1)+cfTtm1))
+            def condterm3(stdT,stdt,stdtm1,cfTtm1,cfttm1,cfTt):
+                return .5*torch.exp(cfTtm1+cfttm1)*(stdT/stdtm1)*((stdT/stdt)**2*torch.exp(2*cfTt)-(stdT/stdtm1)**2*torch.exp(2*cfTtm1)+
+                    stdtm1**2-stdt**2-cfttm1)/(torch.sinh(torch.log(stdT/stdtm1)+cfTtm1))
+            def condterm4(stdT,stdt,stdtm1,cfTtm1,cfttm1,cfTt):
+                return torch.sqrt(.5)*stdtm1*torch.sqrt(
+                    torch.sinh(2*torch.log(stdT/stdtm1)+2*cfTtm1)
+                    -torch.sinh(2*torch.log(stdT/stdt)+2*cfTt)
+                    -stdtm1**2+stdt**2+cfttm1)/(torch.sinh(torch.log(stdT/stdtm1)+cfTtm1))
+                
     elif config.training.sde.lower() == 'subvpsde':
         sde = sde_lib.subVPSDE(beta_min=config.model.beta_min, beta_max=config.model.beta_max, N=config.model.num_scales)
         sampling_eps = 0.
@@ -183,21 +201,47 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
         x = x_mean + d * dW
         return x, x_mean
     
+    def TamedEulerMaruyama(x, t, dt, dW):
+        #dt is negative
+        d=diffusion(t)[:, None, None, None]
+        stheta=-score_fn(x,t)/std(t)
+        drift=-d**2*(stheta+x/2)
+        norm_diff=imagenorm(drift)[:,None,None,None]
+        x_mean = x + drift * dt/(1.-dt*norm_diff) #dt is negative so -dt=abs(dt)
+        x = x_mean + d * dW
+        return x, x_mean
+    
+    @torch.no_grad()
     def ExponentialIntegrator(x, t, dt, dW):
         #should only work for vpsde
         factor=EIfactor(dt,t)[:, None, None, None]
         stdt=std(t)
         stdtm1=std(t+dt)
-        stheta=score_fn(x,t)
+        stheta=score_fn(x,t*torch.ones(x.shape[0])) #=-grad_logP*stdt
         drift=stdtm1-stdt*factor
         noise=torch.zeros_like(dW)
         if not probflow:
             drift=(stdtm1**2/(factor*stdt)-stdt*factor)
             noise=stdtm1*torch.sqrt(1.-1./factor**2)/stdt*dW/torch.sqrt(-dt)
-        x_mean=factor*x+drift*stheta
+        x_mean=factor*x+drift[:, None, None, None]*stheta
         x=x_mean+noise
         return x, x_mean
     
+    @torch.no_grad()
+    def ConditionalExponentialIntegrator(x,t,dt,dW):
+        stdt=std(t) #s
+        stdT=std(obsT)
+        stdtm1=std(t+dt) #t
+        cfTtm1=CondFactor(t+dt,obsT) 
+        cfTt=CondFactor(t,obsT)
+        cfttm1=CondFactor(t+dt,t) 
+        stheta=score_fn(x,t*torch.ones(x.shape[0],device=x.device)) #=-grad_logP*stdt
+        xt=condterm1(stdT,stdt,stdtm1,cfTtm1,cfTt)*x
+        xt+=condterm2(stdT,stdt,stdtm1,cfTtm1,cfttm1)*obsV
+        xt+=condterm3(stdT,stdt,stdtm1,cfTtm1,cfttm1,cfTt)*(x-stdt*stheta)
+        xt+=condterm4(stdT,stdt,stdtm1,cfTtm1,cfttm1,cfTt)*dW/torch.sqrt(-dt)
+        return xt,None
+
     def adaptiveEulerMaruyama(x, t, dt, dW,drift,diffusion):
         #dt is negative
         d=diffusion(t)[:, None, None, None]
@@ -207,13 +251,13 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
         x = x_mean + d * dW
         return x, x_mean, drift,d
     
-    if sampler.lower()=='expint':
-        samplerfun=ExponentialIntegrator
+    if sampler.lower()=='em':
+        samplerfun=EulerMaruyama
     elif sampler.lower()=='tem':
         samplerfun=TamedEulerMaruyama
     else:
-        print('Setting sampler for MLMC to Euler-Maruyama.')
-        samplerfun=EulerMaruyama
+        print('Setting sampler for MLMC to ExpInt.')
+        samplerfun=ExponentialIntegrator
     
     def mlmc_sampler(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,saver=False):
         """ 
@@ -245,18 +289,16 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
             for i in range(Nf):
                 dt=fine_times[i+1]-tf_
                 dtc+=dt #running sum of coarse timestep
-                vec_t = torch.ones(bs, device=tf_.device, dtype=torch.float32) * tf_
                 dWf = torch.randn_like(xf)*torch.sqrt(-dt)
                 dWc+=dWf
-                xf,xf_mean=samplerfun(xf,vec_t,dt,dWf)
+                xf,xf_mean=samplerfun(xf,tf_,dt,dWf)
                 tf_ = fine_times[i+1] #fine solution now advanced to this time
                 if saver:
                     finelist=torch.cat((finelist,inverse_scaler(xf)[0][None,...].cpu()),dim=0)
                     finetimes=torch.cat((finetimes,tf_[None,None,...].cpu()),dim=0)
             
                 if i%M==(M-1): #if i is integer multiple of M...
-                    vec_t = torch.ones(bs, device=tc.device,dtype=torch.float32) * tc
-                    xc,xc_mean=samplerfun(xc,vec_t,dtc,dWc) #...Develop coarse path
+                    xc,xc_mean=samplerfun(xc,tc,dtc,dWc) #...Develop coarse path
                     dWc=torch.zeros_like(xc) #...Re-initialise coarse BI to 0
                     tc=tf_.clone() #coarse solution now advanced to current fine time
                     dtc=0.
@@ -559,23 +601,23 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
                 print(f'l={l}') #total cost
                 sums[i],sqsums[i],cost[i] = looper(Nsamples,l,M,Lmin=0)
         
-            # Write samples to disk or Google Cloud Storage
-            with tf.io.gfile.GFile(os.path.join(this_sample_dir, "averages.pt"), "wb") as fout:
-                io_buffer = io.BytesIO()
-                torch.save(sums/Nsamples,io_buffer)
-                fout.write(io_buffer.getvalue())
-            with tf.io.gfile.GFile(os.path.join(this_sample_dir, "sqaverages.pt"), "wb") as fout:
-                io_buffer = io.BytesIO()
-                torch.save(sqsums/Nsamples,io_buffer)
-                fout.write(io_buffer.getvalue())
-            with tf.io.gfile.GFile(os.path.join(this_sample_dir, "Ls.pt"), "wb") as fout:
-                io_buffer = io.BytesIO()
-                torch.save(torch.arange(0,Lmax+1,dtype=torch.int32),io_buffer)
-                fout.write(io_buffer.getvalue())
-            with tf.io.gfile.GFile(os.path.join(this_sample_dir, "avgcost.pt"), "wb") as fout:
-                io_buffer = io.BytesIO()
-                torch.save(cost/Nsamples,io_buffer)
-                fout.write(io_buffer.getvalue())
+                # Write samples to disk or Google Cloud Storage
+                with tf.io.gfile.GFile(os.path.join(this_sample_dir, "averages.pt"), "wb") as fout:
+                    io_buffer = io.BytesIO()
+                    torch.save(sums/Nsamples,io_buffer)
+                    fout.write(io_buffer.getvalue())
+                with tf.io.gfile.GFile(os.path.join(this_sample_dir, "sqaverages.pt"), "wb") as fout:
+                    io_buffer = io.BytesIO()
+                    torch.save(sqsums/Nsamples,io_buffer)
+                    fout.write(io_buffer.getvalue())
+                with tf.io.gfile.GFile(os.path.join(this_sample_dir, "Ls.pt"), "wb") as fout:
+                    io_buffer = io.BytesIO()
+                    torch.save(torch.arange(0,Lmax+1,dtype=torch.int32),io_buffer)
+                    fout.write(io_buffer.getvalue())
+                with tf.io.gfile.GFile(os.path.join(this_sample_dir, "avgcost.pt"), "wb") as fout:
+                    io_buffer = io.BytesIO()
+                    torch.save(cost/Nsamples,io_buffer)
+                    fout.write(io_buffer.getvalue())
             
             means_p=imagenorm(sums[:,1])/Nsamples
             V_p=mom2norm(sqsums[:,1])/Nsamples-means_p**2
@@ -590,7 +632,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
             V_dp=V_dp[cutoff:]
             
             X=np.ones((Lmax-cutoff+1,2))
-            X[:,0]=np.arange(1,Lmax+1)
+            X[:,0]=np.arange(1,Lmax-cutoff+1)
             a = np.linalg.lstsq(X,np.log(means_dp[1:]),rcond=None)[0]
             alpha = -a[0]/np.log(M)
             Y0=np.exp(a[1])
@@ -621,8 +663,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
             gamma=temp[2].item()
             Y0=temp[3].item()
             Lmin=int(temp[4])
-            print(alpha,beta,gamma,Y0,Lmin)
-        
+            
         #Do the calculations and simulations for num levels and complexity plot
         sums=torch.zeros((Lmax+1-Lmin,*sums.shape[1:]))
         sqsums=torch.zeros((Lmax+1-Lmin,*sqsums.shape[1:]))
@@ -641,8 +682,9 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
             cost_mlmc=torch.sum(N*cost) #cost is number of NFE
             #Optimise MC cost
             K2=((M**alpha-1)/Y0)**(-1/alpha)
-            cost_mc=K2*e**(-2-1/alpha)*V_p[-1]*(2*alpha+1)**(1+.5/alpha)/(2*alpha) #maybe should change this
-            
+            #cost_mc=K2*e**(-2-1/alpha)*V_p[-1]*(2*alpha+1)**(1+.5/alpha)/(2*alpha) #maybe should change this
+            cost_mc=(1/(e*accsplit))**2*V_p[-1]*M**cost[-1]/(1+1./M)
+
             # Directory to save means, norms and N
             dividerN=N.clone() #add axes to N to broadcast correctly on division
             for i in range(len(sums.shape[1:])):
