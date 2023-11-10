@@ -77,6 +77,6 @@ for expdir in ['exp/eval/cifar10mean_DDIM0',
     
     with tf.io.gfile.GFile(os.path.join(this_sample_dir, "alphabetagamma.pt"), "wb") as fout:
         io_buffer = io.BytesIO()
-        print(alpha,beta,1.,Y0,cutoff)
-        torch.save(torch.tensor([alpha,beta,1.,Y0,cutoff.item()]),io_buffer)
+        print(alpha,beta,1.,Y0,float(cutoff))
+        torch.save(torch.tensor([alpha,beta,1.,Y0,float(cutoff.item())]),io_buffer)
         fout.write(io_buffer.getvalue())
