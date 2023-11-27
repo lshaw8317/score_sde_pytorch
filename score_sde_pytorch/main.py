@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """Training and evaluation"""
-
+import pickle
 import run_lib
 import argparse
 import sys
@@ -53,13 +53,15 @@ flags.mark_flags_as_required(["workdir", "config", "mode","eval_folder"])
 
 def main(argv):
   if FLAGS.conditional:
-    from torchvision.datasets import CIFAR10
-    #Load an image from the Cifar10 dataset                                                                                                                 
-    x0 = CIFAR10(root='./data', train=True, download=True).__get_item__(42)/255.
-    torch.seed(42)
+    import numpy as np
+    #Load an image from the Cifar10 dataset
+    with open(os.path.join('data',"cifar-10-batches-py/", "data_batch_1"),'rb') as f:
+      x0 = pickle.load(f,encoding='latin1')['data'].reshape(-1, 3, 32, 32)[42]/255.
+    torch.manual_seed(0)
+    x0=2*torch.tensor(x0)-1.
     v=x0+FLAGS.conditional_noise*torch.randn_like(x0)
     denoisedir=os.path.join(FLAGS.eval_folder,f'Denoising_{FLAGS.conditional_noise}')
-    os.mkdir(denoisedir)
+    os.makedirs(denoisedir,exist_ok=True)
     with open(os.path.join(denoisedir, "x0.pt"), "wb") as f:
       torch.save(x0.cpu(),f)
     with open(os.path.join(denoisedir, "v.pt"), "wb") as f:

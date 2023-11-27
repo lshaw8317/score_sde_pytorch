@@ -109,7 +109,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
         config.eval.batch_size=1600
     elif payoff_arg=='mean':
         config.mlmc.N0=100
-        config.eval.batch_size=1500
+        config.eval.batch_size=1000
         print('Setting payoff function to mean image for MLMC.')
         payoff = lambda samples: torch.clip(samples,0.,1.) #default to calculating mean image
     else:
@@ -118,8 +118,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
     dirs=os.listdir(checkpoint_dir)
     ckpt = np.min(np.array([int(d.split('_')[-1][:-4]) for d in dirs]))
     ckpt_dir = os.path.join(checkpoint_dir, f'checkpoint_{ckpt}.pth')
-    if not tf.io.gfile.exists(eval_dir):
-        tf.io.gfile.makedirs(eval_dir)
+    os.makedirs(eval_dir,exist_ok=True)
     
     # Initialize model
     model = mutils.create_model(config)
@@ -141,62 +140,33 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
             beta_t = sde.beta_0 + (t+.5*dt) * (sde.beta_1 - sde.beta_0)
             return torch.exp(.5*(-dt)*beta_t)
         def std(t):
-            t_=t[0]
-            log_mean_coeff = -0.25 * t_ ** 2 * (sde.beta_1 - sde.beta_0) - 0.5 * t_ * sde.beta_0
+            log_mean_coeff = -0.25 * t ** 2 * (sde.beta_1 - sde.beta_0) - 0.5 * t * sde.beta_0
             std = torch.sqrt(1. - torch.exp(2. * log_mean_coeff))
             return std
+        
         if conditional is not None:
-            obsT=conditional.obsT
-            def CondFactor(t,s):
-                #(1/2)int_t^s beta_0 + (beta_1-beta_0)*t
+            def log_mean_coeff(t,s):
+                #int_t^s A
+                #-(1/2)int_t^s beta_0 + (beta_1-beta_0)*t
                 beta_t = sde.beta_0 + .5*(t+s) * (sde.beta_1 - sde.beta_0)
-                return .5*(beta_t)*(s-t)
-            def condterm1(stdT,stdt,stdtm1,cfTtm1,cfTt):
-                return (stdtm1/stdt)*torch.sinh(torch.log(stdT/stdt)+cfTt)/(torch.sinh(torch.log(stdT/stdtm1)+cfTtm1))
-            def condterm2(stdT,stdt,stdtm1,cfTtm1,cfttm1):
-                return .5*(stdtm1/stdT)*(stdtm1**2-stdt**2-2*cfttm1)/(torch.sinh(torch.log(stdT/stdtm1)+cfTtm1))
-            def condterm3(stdT,stdt,stdtm1,cfTtm1,cfttm1,cfTt):
-                return .5*torch.exp(cfTtm1+cfttm1)*(stdT/stdtm1)*((stdT/stdt)**2*torch.exp(2*cfTt)-(stdT/stdtm1)**2*torch.exp(2*cfTtm1)+
-                    stdtm1**2-stdt**2-cfttm1)/(torch.sinh(torch.log(stdT/stdtm1)+cfTtm1))
-            def condterm4(stdT,stdt,stdtm1,cfTtm1,cfttm1,cfTt):
-                return torch.sqrt(.5)*stdtm1*torch.sqrt(
-                    torch.sinh(2*torch.log(stdT/stdtm1)+2*cfTtm1)
-                    -torch.sinh(2*torch.log(stdT/stdt)+2*cfTt)
-                    -stdtm1**2+stdt**2+cfttm1)/(torch.sinh(torch.log(stdT/stdtm1)+cfTtm1))
-                
-    elif config.training.sde.lower() == 'subvpsde':
-        sde = sde_lib.subVPSDE(beta_min=config.model.beta_min, beta_max=config.model.beta_max, N=config.model.num_scales)
-        sampling_eps = 0.
-        def diffusion(t):
-            return None
-        def EIfactor(dt, t):
-            return None
-        def std(t):
-            return None
-        
-    elif config.training.sde.lower() == 'vesde':
-        sde = sde_lib.VESDE(sigma_min=config.model.sigma_min, sigma_max=config.model.sigma_max, N=config.model.num_scales)
-        sampling_eps = 0.
-        def diffusion(t):
-            sigma = sde.sigma_min * (sde.sigma_max / sde.sigma_min) ** t
-            diffusion = sigma * torch.sqrt(torch.tensor(2 * (np.log(sde.sigma_max) - np.log(sde.sigma_min)),
-                                                        device=t.device))
-            return diffusion
-        def EIfactor(dt, t):
-            return None
-        def std(t):
-            return None
-        
+                return -.5*(beta_t)*(s-t)
+           
+            obsT=(-sde.beta_0+torch.sqrt(sde.beta_0**2 + 2*(sde.beta_1 - sde.beta_0)*torch.log1p(torch.tensor([conditional.noise])**2)))/(sde.beta_1 - sde.beta_0)
+            sde.T=obsT.item()
+            obsV=(conditional.obsV*torch.exp(log_mean_coeff(0,obsT))).to(torch.float32) #convert to v_
+            obsT=obsT.to(config.device)
+            sde.prior_sampling = lambda shape: obsV.repeat((shape[0],*tuple([1 for i in range(len(obsV.shape))])))
     else:
         raise NotImplementedError(f"SDE {config.training.sde} unknown. Only VPSDE allowed.")
 
     score_fn=mutils.get_score_fn(sde, model,continuous=config.training.continuous)
     rsde = sde.reverse(score_fn, probability_flow=probflow)
-    
+
+    @torch.no_grad()
     def EulerMaruyama(x, t, dt, dW):
         #dt is negative
-        d=diffusion(t)[:, None, None, None]
-        stheta=-score_fn(x,t)/std(t)
+        d=diffusion(t)
+        stheta=-score_fn(x,t*torch.ones(x.shape[0],device=x.device,dtype=torch.float32))/std(t)
         x_mean = x - d**2*(stheta+x/2) * dt
         x = x_mean + d * dW
         return x, x_mean
@@ -214,34 +184,61 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
     @torch.no_grad()
     def ExponentialIntegrator(x, t, dt, dW):
         #should only work for vpsde
-        factor=EIfactor(dt,t)[:, None, None, None]
+        factor=EIfactor(dt,t)
         stdt=std(t)
         stdtm1=std(t+dt)
-        stheta=score_fn(x,t*torch.ones(x.shape[0])) #=-grad_logP*stdt
+        stheta=score_fn(x,t*torch.ones(x.shape[0],device=x.device,dtype=torch.float32)) #=-grad_logP*stdt
         drift=stdtm1-stdt*factor
         noise=torch.zeros_like(dW)
         if not probflow:
             drift=(stdtm1**2/(factor*stdt)-stdt*factor)
             noise=stdtm1*torch.sqrt(1.-1./factor**2)/stdt*dW/torch.sqrt(-dt)
-        x_mean=factor*x+drift[:, None, None, None]*stheta
+        x_mean=factor*x+drift*stheta
         x=x_mean+noise
         return x, x_mean
-    
+
     @torch.no_grad()
     def ConditionalExponentialIntegrator(x,t,dt,dW):
-        stdt=std(t) #s
+        stdt=std(t)
         stdT=std(obsT)
-        stdtm1=std(t+dt) #t
-        cfTtm1=CondFactor(t+dt,obsT) 
-        cfTt=CondFactor(t,obsT)
-        cfttm1=CondFactor(t+dt,t) 
-        stheta=score_fn(x,t*torch.ones(x.shape[0],device=x.device)) #=-grad_logP*stdt
-        xt=condterm1(stdT,stdt,stdtm1,cfTtm1,cfTt)*x
-        xt+=condterm2(stdT,stdt,stdtm1,cfTtm1,cfttm1)*obsV
-        xt+=condterm3(stdT,stdt,stdtm1,cfTtm1,cfttm1,cfTt)*(x-stdt*stheta)
-        xt+=condterm4(stdT,stdt,stdtm1,cfTtm1,cfttm1,cfTt)*dW/torch.sqrt(-dt)
-        return xt,None
+        stdtm1=std(t+dt)
+        f1=torch.exp(log_mean_coeff(t+dt,t))
+        ftT=torch.exp(log_mean_coeff(t,obsT))
+        ftm1T=torch.exp(log_mean_coeff(t+dt,obsT))
+        vec_t=t*torch.ones(x.shape[0],device=x.device,dtype=torch.float32)
+        stheta=-score_fn(x,vec_t)/stdt #=-grad_logP*stdt
+        
+        xt=x/f1
+        xt+=(stdt**2/f1-f1*stdtm1**2*(stdT**2-(stdt*ftT)**2)/(stdT**2-(stdtm1*ftT)**2))*stheta
+        Sigtm1=stdtm1**2
+        Sigt=stdt**2
+        SigT=stdT**2
+        noiseterm=torch.sqrt(
+            Sigtm1/Sigt*((Sigt/ftT)**2-(SigT*ftT)**2)-(
+                (Sigtm1/ftm1T)**2-(SigT*ftm1T)**2)-2*Sigtm1*SigT*(
+                    torch.log(stdt/(stdtm1+1e-10))-log_mean_coeff(t+dt,t)))
+        xt+=2*stdtm1**2/(ftm1T*stdtm1**2-stdT**2/ftm1T)*(
+            ftT*(x+stdt**2*stheta)-sde.prior_sampling(x.shape).to(x.device))*(
+                torch.log(stdt/(stdtm1+1e-10))-log_mean_coeff(t+dt,t)) #obsV
+        xt+=stdtm1*noiseterm/(stdtm1**2*ftm1T-stdT**2/ftm1T)*dW/torch.sqrt(-dt)
 
+        return xt,None
+    
+    @torch.no_grad()
+    def ConditionalEulerMaruyama(x, t, dt, dW):
+        #dt is negative
+        cf=log_mean_coeff(t,obsT)
+        stdt=std(t)
+        stdT=std(obsT)
+        d=diffusion(t)
+        vec_t=t*torch.ones(x.shape[0],device=x.device,dtype=torch.float32)
+        stheta=-score_fn(x,vec_t)/stdt
+        tempV=obsV.repeat((x.shape[0],*tuple([1 for i in range(len(obsV.shape))]))).to(x.device)
+        #divider=std(obsT)**2*torch.exp(-cf)+std(t)**2*torch.exp(cf)
+        x_mean = x - d**2*(stheta+x/2+(tempV-x*torch.exp(cf))/stdT**2) * dt
+        x = x_mean + d * dW
+        return x, x_mean
+    
     def adaptiveEulerMaruyama(x, t, dt, dW,drift,diffusion):
         #dt is negative
         d=diffusion(t)[:, None, None, None]
@@ -258,7 +255,14 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
     else:
         print('Setting sampler for MLMC to ExpInt.')
         samplerfun=ExponentialIntegrator
-    
+    if conditional is not None:
+        if sampler.lower()=='em':
+            print('Setting sampler for MLMC to ConditionalEM.')
+            samplerfun=EulerMaruyama
+        else:
+            print('Setting sampler for MLMC to ConditionalExpInt.')
+            samplerfun=ExponentialIntegrator
+        
     def mlmc_sampler(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,saver=False):
         """ 
         The path function for Euler-Maruyama diffusion, which calculates final samples \sim p(x_0).
@@ -276,7 +280,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
             xc = xf.clone()
             Nf=M**l
             #Nc=M**(l-1) implicitly
-            fine_times = torch.linspace(sde.T, sampling_eps,Nf+1, device=xf.device,dtype=torch.float32)
+            fine_times = torch.linspace(sde.T, sampling_eps,Nf+1,device=xf.device,dtype=torch.float32)
             dWc=torch.zeros_like(xf).to(xc.device)
             dtc=fine_times[0]*0.
             tc=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
@@ -300,7 +304,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
                 if i%M==(M-1): #if i is integer multiple of M...
                     xc,xc_mean=samplerfun(xc,tc,dtc,dWc) #...Develop coarse path
                     dWc=torch.zeros_like(xc) #...Re-initialise coarse BI to 0
-                    tc=tf_.clone() #coarse solution now advanced to current fine time
+                    tc=tf_  #coarse solution now advanced to current fine time
                     dtc=0.
                     if saver:
                         coarselist=torch.cat((coarselist,inverse_scaler(xc)[0][None,...].cpu()),dim=0)
@@ -424,7 +428,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
         coarsecost=0.
         for r in range(num_sampling_rounds):
             bs=numrem if r==num_sampling_rounds-1 else config.eval.batch_size
-    
+            if bs==0:
+                break
             Xf,Xc,fc,cc=mlmc_sample(bs,l,M) #should automatically use cuda
             finecost+=fc*bs
             coarsecost+=cc*bs
@@ -625,14 +630,14 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
             V_dp=mom2norm(sqsums[:,0])/Nsamples-means_dp**2  
             
             #Estimate orders of weak (alpha from means) and strong (beta from variance) convergence using LR
-            cutoff=np.argmax(V_dp<(np.sqrt(M)-1.)**2*V_p[-1]/(1+M))-1 #index of optimal lmin 
+            cutoff=np.argmax(V_dp[1:]<(np.sqrt(M)-1.)**2*V_p[-1]/(1+M)) #index of optimal lmin 
             means_p=means_p[cutoff:]
             V_p=V_p[cutoff:]
             means_dp=means_dp[cutoff:]
             V_dp=V_dp[cutoff:]
             
-            X=np.ones((Lmax-cutoff+1,2))
-            X[:,0]=np.arange(1,Lmax-cutoff+1)
+            X=np.ones((Lmax-cutoff,2))
+            X[:,0]=np.arange(1.,Lmax-cutoff+1)
             a = np.linalg.lstsq(X,np.log(means_dp[1:]),rcond=None)[0]
             alpha = -a[0]/np.log(M)
             Y0=np.exp(a[1])
@@ -683,7 +688,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmin=0,Lmax=1
             #Optimise MC cost
             K2=((M**alpha-1)/Y0)**(-1/alpha)
             #cost_mc=K2*e**(-2-1/alpha)*V_p[-1]*(2*alpha+1)**(1+.5/alpha)/(2*alpha) #maybe should change this
-            cost_mc=(1/(e*accsplit))**2*V_p[-1]*M**cost[-1]/(1+1./M)
+            cost_mc=(1/(e*accsplit))**2*V_p[-1]*cost[-1]/(1+1./M)
 
             # Directory to save means, norms and N
             dividerN=N.clone() #add axes to N to broadcast correctly on division
