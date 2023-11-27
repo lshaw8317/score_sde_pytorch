@@ -15,13 +15,8 @@ class SDE(abc.ABC):
     """
     super().__init__()
     self.N = N
-
-  @property
-  @abc.abstractmethod
-  def T(self):
-    """End time of the SDE."""
-    pass
-
+    self.T =None
+        
   @abc.abstractmethod
   def sde(self, x, t):
     pass
@@ -85,10 +80,7 @@ class SDE(abc.ABC):
       def __init__(self):
         self.N = N
         self.probability_flow = probability_flow
-
-      @property
-      def T(self):
-        return T
+        self.T=T
 
       def sde(self, x, t):
         """Create the drift and diffusion functions for the reverse SDE/ODE."""
@@ -127,10 +119,7 @@ class VPSDE(SDE):
     self.alphas_cumprod = torch.cumprod(self.alphas, dim=0)
     self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)
     self.sqrt_1m_alphas_cumprod = torch.sqrt(1. - self.alphas_cumprod)
-
-  @property
-  def T(self):
-    return 1
+    self.T=1
 
   def sde(self, x, t):
     beta_t = self.beta_0 + t * (self.beta_1 - self.beta_0)
