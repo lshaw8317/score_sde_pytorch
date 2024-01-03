@@ -33,23 +33,20 @@ FLAGS = flags.FLAGS
 config_flags.DEFINE_config_file(
   "config", None, "Training configuration.", lock_config=True)
 flags.DEFINE_string("workdir", None, "Work directory.")
-flags.DEFINE_enum("mode", None, ["MLMC", "MC"], "Running mode: MLMC or MC")
 flags.DEFINE_string("eval_folder",None,"The folder name for storing evaluation results")
 
-flags.DEFINE_enum("payoff",'mean',['mean','activations','secondmoment'],"Payoff functions for MLMC")
+flags.DEFINE_enum("payoff",'mean',['mean','secondmoment'],"Payoff functions for MLMC")
 flags.DEFINE_list("acc",[],"Accuracies for MLMC")
-flags.DEFINE_list("abg",[-1,-1,-1],"Convergence exponents alpha,beta,gamma")
+flags.DEFINE_list("abL",None,"Convergence exponents alpha,beta and Lmin")
 flags.DEFINE_integer("Lmax",11,"Maximum allowed L")
 flags.DEFINE_integer("M",2,"Mesh refinement factor")
-flags.DEFINE_integer("Lmin",2,"Starting l0")
-flags.DEFINE_enum('MLMCsampler','EXPINT',['EM','TEM','EXPINT'],"Sampler to use for MLMC")
-flags.DEFINE_boolean('adaptive',False,"Use adaptive (EM) sampling")
+flags.DEFINE_enum('MLMCsampler','EXPINT',['EM','EXPINT'],"Sampler to use for MLMC")
 flags.DEFINE_boolean('probflow',False,"Use probflow ODE for sampling")
 flags.DEFINE_float("accsplit",1./1.41,"accsplit for var-bias split")
 flags.DEFINE_boolean("conditional",False,"Denoising problem")
 flags.DEFINE_float("conditional_noise",.4,"Denoising problem noise")
 
-flags.mark_flags_as_required(["workdir", "config", "mode","eval_folder"])
+flags.mark_flags_as_required(["workdir", "config","eval_folder"])
 
 def main(argv):
   if FLAGS.conditional:
@@ -65,26 +62,24 @@ def main(argv):
     with open(os.path.join(denoisedir, "x0.pt"), "wb") as f:
       torch.save(x0.cpu(),f)
     with open(os.path.join(denoisedir, "v.pt"), "wb") as f:
-      torch.save(v.cpu(),f) 
-    conditional=edict(obsV=v,noise=FLAGS.conditional_noise)
+      torch.save(v.cpu(),f)
+    try:
+      with open(os.path.join(denoisedir, "mask.pt"), "rb") as f:
+        MASK=torch.load(mask)
+    except:
+      print('No mask for conditional sampling found. Defaulting to identity.')
+      MASK=torch.ones_like(v)
+    conditional=edict(obsV=v,noise=FLAGS.conditional_noise,MASK=MASK)
+
   else:
     conditional=None
 
 
-  if FLAGS.mode == "MLMC":
-    print(FLAGS.accsplit)
-    # Run the evaluation pipeline
-    MLMC.mlmc_test(FLAGS.config,FLAGS.eval_folder,FLAGS.workdir,FLAGS.payoff,
-                   [float(a) for a in FLAGS.acc],FLAGS.M,FLAGS.Lmin,FLAGS.Lmax,
-                   FLAGS.MLMCsampler,FLAGS.adaptive,FLAGS.probflow,MLMC_=True,accsplit=FLAGS.accsplit,
-                   abg=(float(a) for a in FLAGS.abg),conditional=conditional)
-  elif FLAGS.mode == "MC":
-    MLMC.mlmc_test(FLAGS.config,FLAGS.eval_folder,FLAGS.workdir,FLAGS.payoff,
-                   M=FLAGS.M,Lmax=FLAGS.Lmax,sampler=FLAGS.MLMCsampler,
-                   adaptive=FLAGS.adaptive,probflow=FLAGS.probflow,MLMC_=False)
-  else:
-    raise ValueError(f"Mode {FLAGS.mode} not recognized.")
-
+  # Run the evaluation pipeline
+  MLMC.mlmc_test(FLAGS.config,FLAGS.eval_folder,FLAGS.workdir,FLAGS.payoff,
+                   [float(a) for a in FLAGS.acc],FLAGS.M,FLAGS.Lmax,
+                   FLAGS.MLMCsampler,FLAGS.probflow,accsplit=FLAGS.accsplit,
+                   abL=FLAGS.abL,conditional=conditional)
 
 if __name__ == "__main__":
   app.run(main)
