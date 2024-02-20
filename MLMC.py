@@ -43,7 +43,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
     mlmcopts.M=M
     mlmcopts.Lmax=Lmax
     mlmcopts.N0=50
-    mlmcopts.batch_size=1200
+    mlmcopts.batch_size=1600
     mlmcopts.accsplit=accsplit
     config.model.num_scales=(M)**(Lmax)
     
@@ -68,8 +68,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
 
     sampling_shape = (config.eval.batch_size,
                       config.data.num_channels,
-                      config.data.image_size, config.data.image_size)
-    
+                      config.data.image_size, config.data.image_size)    
     if config.training.sde.lower() == 'vpsde':
         sde = sde_lib.VPSDE(beta_min=config.model.beta_min, beta_max=config.model.beta_max, N=config.model.num_scales)
         sampling_eps = 0.
@@ -101,6 +100,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
         raise NotImplementedError(f"SDE {config.training.sde} unknown. Only VPSDE allowed.")
 
     score_fn=mutils.get_score_fn(sde, model,continuous=config.training.continuous)
+    #score_fn=lambda x,t:std(t[0])*torch.sin(t)[...,None,None,None]*torch.ones_like(x)
     rsde = sde.reverse(score_fn, probability_flow=probflow)
 
     def imagenorm(img):
@@ -125,37 +125,49 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
         d=diffusion(t)
         stheta=-score_fn(x,t*torch.ones(x.shape[0],device=x.device,dtype=torch.float32))/std(t)
         x_mean = x - d**2*(stheta+x/2) * dt
-        x = x_mean + d * dW
+        x = x_mean + d*dW
         return x, x_mean
-    
+
+    def EIBrownianIncrement(t,dt,xi):
+        factor=EIfactor(dt,t)
+        stdt=std(t)
+        stdtm1=std(t+dt)
+        scaler=(stdtm1/stdt)**2/factor
+        dBnew=stdtm1*torch.sqrt(1.-(stdtm1/(stdt*factor))**2)*xi
+        return dBnew,scaler
+        
     @torch.no_grad()
-    def ExponentialIntegrator(x, t, dt, dW):
+    def ExponentialIntegrator(x, t, dt, dB):
         #should only work for vpsde
         factor=EIfactor(dt,t)
         stdt=std(t)
         stdtm1=std(t+dt)
         stheta=score_fn(x,t*torch.ones(x.shape[0],device=x.device,dtype=torch.float32)) #=-grad_logP*stdt
         drift=stdtm1-stdt*factor
-        noise=torch.zeros_like(dW)
+        noise=torch.zeros_like(dB)
         if not probflow:
             drift=(stdtm1**2/(factor*stdt)-stdt*factor)
-            noise=stdtm1*torch.sqrt(1.-1./factor**2)/stdt*dW/torch.sqrt(-dt)
+            noise+=dB
         x_mean=factor*x+drift*stheta
         x=x_mean+noise
         return x, x_mean
 
     if sampler.lower()=='em':
         samplerfun=EulerMaruyama
+        BIfun=lambda t,dt,xi: torch.sqrt(-dt)*xi,1.
     else:
         print('Setting sampler for MLMC to ExpInt.')
         samplerfun=ExponentialIntegrator
+        BIfun=EIBrownianIncrement
     if conditional is not None:
         if sampler.lower()=='em':
             print('Setting sampler for MLMC to ConditionalEM.')
             samplerfun=EulerMaruyama
+            BIfun=lambda t,dt,xi: torch.sqrt(-dt)*xi,1.
         else:
             print('Setting sampler for MLMC to ConditionalExpInt.')
             samplerfun=ExponentialIntegrator
+            BIfun=EIBrownianIncrement
         
     def mlmc_sampler(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,saver=False):
         """ 
@@ -175,7 +187,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
             Nf=M**l
             #Nc=M**(l-1) implicitly
             fine_times = torch.linspace(sde.T, sampling_eps,Nf+1,device=xf.device,dtype=torch.float32)
-            dWc=torch.zeros_like(xf).to(xc.device)
+            dBc=torch.zeros_like(xf).to(xc.device)
             dtc=fine_times[0]*0.
             tc=torch.tensor([sde.T],dtype=torch.float32).to(xc.device)
             if saver:
@@ -187,17 +199,18 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
             for i in range(Nf):
                 dt=fine_times[i+1]-tf_
                 dtc+=dt #running sum of coarse timestep
-                dWf = torch.randn_like(xf)*torch.sqrt(-dt)
-                dWc+=dWf
-                xf,xf_mean=samplerfun(xf,tf_,dt,dWf)
+                xi = torch.randn_like(xf)
+                dBf,scaler=BIfun(tf_,dt,xi)
+                xf,xf_mean=samplerfun(xf,tf_,dt,dBf)
                 tf_ = fine_times[i+1] #fine solution now advanced to this time
+                dBc=dBf+scaler*dBc
                 if saver:
                     finelist=torch.cat((finelist,inverse_scaler(xf)[0][None,...].cpu()),dim=0)
                     finetimes=torch.cat((finetimes,tf_[None,None,...].cpu()),dim=0)
             
                 if i%M==(M-1): #if i is integer multiple of M...
-                    xc,xc_mean=samplerfun(xc,tc,dtc,dWc) #...Develop coarse path
-                    dWc=torch.zeros_like(xc) #...Re-initialise coarse BI to 0
+                    xc,xc_mean=samplerfun(xc,tc,dtc,dBc) #...Develop coarse path
+                    dBc=torch.zeros_like(xc) #...Re-initialise coarse BI to 0
                     tc=tf_  #coarse solution now advanced to current fine time
                     dtc=0.
                     if saver:
@@ -291,7 +304,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
         #Orders of convergence
         alpha=max(0.,alpha_0)
         beta=max(0.,beta_0)
-        L=Lmin+1
+        L=Lmin+2
 
 
         mylen=L+1-Lmin
@@ -341,7 +354,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
             sqrt_cost=torch.sqrt(cost) #cost per sample on average at each level
             Nl_new=torch.ceil(((accsplit*accuracy)**-2)*torch.sum(sqrt_V*sqrt_cost)*(sqrt_V/sqrt_cost)) #Estimate optimal number of samples/level
             dN=torch.clip(Nl_new-N,min=0) #Number of additional samples
-            print(f'Std={torch.sqrt(torch.sum(V/N))}. Bias={Yl[-1]/(M**alpha-1)}. Error={torch.sqrt((Yl[-1]/(M**alpha-1))**2+torch.sum(V/N))}.')
+            print(f'Std={torch.sqrt(torch.sum(2*V/N))}. Bias={np.sqrt(2)*Yl[-1]/(M**alpha-1)}. Error={torch.sqrt((Yl[-1]/(M**alpha-1))**2+torch.sum(V/N))}.')
             if torch.sum(dN > 0.01*N).item() == 0: #Almost converged
                 test=max(Yl[-2]/(M**alpha),Yl[-1]) if len(N)>2 else Yl[-1]
                 if test>(M**alpha-1)*accuracy*np.sqrt(1-accsplit**2):
@@ -407,7 +420,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
             V_dp=mom2norm(sqsums[:,0])/Nsamples-means_dp**2  
             
             #Estimate orders of weak (alpha from means) and strong (beta from variance) convergence using LR
-            cutoff=np.argmax(V_dp[1:]<(np.sqrt(M)-1.)**2*V_p[-1]/(1+M)) #index of optimal lmin 
+            Lmincond=V_dp[1:]<(np.sqrt(M)-1.)**2*V_p[-1]/(1+M) #index of optimal lmin
+            cutoff=np.argmax(Lmincond[1:]*Lmincond[:-1])   
             means_p=means_p[cutoff:]
             V_p=V_p[cutoff:]
             means_dp=means_dp[cutoff:]
@@ -438,6 +452,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
                     alpha=temp[0].item()
                     beta=temp[1].item()
                     Lmin=int(temp[-1])
+                
             except:
                 print('Will estimate alpha,beta during algorithm. Setting Lmin=3')
                 alpha=-1
@@ -453,6 +468,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
         for i in range(len(acc)):
             e=acc[i]
             print(f'Performing mlmc for accuracy={e}')
+            print(f'abLmin={alpha,beta,Lmin}')
             sums,sqsums,N,cost=mlmc(e,M,alpha_0=alpha,beta_0=beta,N0=N0,Lmin=Lmin,Lmax=Lmax) #sums=[dX,Xf,Xc], sqsums=[||dX||^2,||Xf||^2,||Xc||^2]
             means_p=imagenorm(sums[:,1])/N #Norm of mean of fine discretisations
             V_p=mom2norm(sqsums[:,1])/N-means_p**2
