@@ -35,7 +35,7 @@ config_flags.DEFINE_config_file(
 flags.DEFINE_string("workdir", None, "Work directory.")
 flags.DEFINE_string("eval_folder",None,"The folder name for storing evaluation results")
 
-flags.DEFINE_enum("payoff",'mean',['mean','secondmoment'],"Payoff functions for MLMC")
+flags.DEFINE_enum("payoff",'secondmoment',['mean','secondmoment'],"Payoff functions for MLMC")
 flags.DEFINE_list("acc",[],"Accuracies for MLMC")
 flags.DEFINE_list("abL",None,"Convergence exponents alpha,beta and Lmin")
 flags.DEFINE_integer("Lmax",11,"Maximum allowed L")

@@ -42,8 +42,8 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
         mlmcopts.Lmin=3
     mlmcopts.M=M
     mlmcopts.Lmax=Lmax
-    mlmcopts.N0=50
-    mlmcopts.batch_size=1600
+    mlmcopts.N0=30
+    mlmcopts.batch_size=1800
     mlmcopts.accsplit=accsplit
     config.model.num_scales=(M)**(Lmax)
     
@@ -105,8 +105,6 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
 
     def imagenorm(img):
         s=MASK.sum()
-        if len(img.shape)==1: #fix for when img is single dimensional (batch_size,) -> (batch_size,1)
-            img=img[:,None]
         n=torch.linalg.norm(torch.flatten(img*MASK[None,...], start_dim=1, end_dim=-1),dim=-1) #flattens non-batch dims and calculates norm
         n/=np.sqrt(s)
         return n
@@ -152,13 +150,6 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
         x=x_mean+noise
         return x, x_mean
 
-    if sampler.lower()=='em':
-        samplerfun=EulerMaruyama
-        BIfun=lambda t,dt,xi: torch.sqrt(-dt)*xi,1.
-    else:
-        print('Setting sampler for MLMC to ExpInt.')
-        samplerfun=ExponentialIntegrator
-        BIfun=EIBrownianIncrement
     if conditional is not None:
         if sampler.lower()=='em':
             print('Setting sampler for MLMC to ConditionalEM.')
@@ -168,7 +159,16 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
             print('Setting sampler for MLMC to ConditionalExpInt.')
             samplerfun=ExponentialIntegrator
             BIfun=EIBrownianIncrement
+    else:
         
+        if sampler.lower()=='em':
+            samplerfun=EulerMaruyama
+            BIfun=lambda t,dt,xi: torch.sqrt(-dt)*xi,1.
+        else:
+            print('Setting sampler for MLMC to ExpInt.')
+            samplerfun=ExponentialIntegrator
+            BIfun=EIBrownianIncrement
+
     def mlmc_sampler(bs,l,M,sde=sde,sampling_eps=sampling_eps,sampling_shape=sampling_shape,saver=False):
         """ 
         The path function for Euler-Maruyama diffusion, which calculates final samples \sim p(x_0).
@@ -185,6 +185,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
             xf = sde.prior_sampling((bs,*sampling_shape[-3:])).to(config.device)
             xc = xf.clone()
             Nf=M**l
+            sqrtM=torch.sqrt(torch.tensor([M],dtype=xf.dtype)).to(xf.device)
             #Nc=M**(l-1) implicitly
             fine_times = torch.linspace(sde.T, sampling_eps,Nf+1,device=xf.device,dtype=torch.float32)
             dBc=torch.zeros_like(xf).to(xc.device)
@@ -209,6 +210,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
                     finetimes=torch.cat((finetimes,tf_[None,None,...].cpu()),dim=0)
             
                 if i%M==(M-1): #if i is integer multiple of M...
+                    #dBc,_=BIfun(tc,dtc,dBc)
                     xc,xc_mean=samplerfun(xc,tc,dtc,dBc) #...Develop coarse path
                     dBc=torch.zeros_like(xc) #...Re-initialise coarse BI to 0
                     tc=tf_  #coarse solution now advanced to current fine time
@@ -304,7 +306,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
         #Orders of convergence
         alpha=max(0.,alpha_0)
         beta=max(0.,beta_0)
-        L=Lmin+2
+        L=Lmin+1
 
 
         mylen=L+1-Lmin
@@ -329,17 +331,24 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
                     cost[i]=(cost[i]*N[i]+c)/(num+N[i])
             
             N+=dN #Increment samples taken counter for each level
-            Yl=imagenorm(sums[:,0])/N
-            V=torch.clip(mom2norm(sqsums[:,0])/N-(Yl)**2,min=0) #Calculate variance based on updated samples
-        
-            ##Fix to deal with zero variance or mean by linear extrapolation
-            Yl[2:]=torch.maximum(Yl[2:],.5*Yl[1:-1]*M**(-alpha))
-            V[2:]=torch.maximum(V[2:],.5*V[1:-1]*M**(-beta))
-
+            cf=1
+            Yl=(imagenorm(sums[:,0])/N).to(torch.float32)
+            while True:
+                V=torch.clip(mom2norm(sqsums[:,0])/N-(Yl)**2,min=0.).to(torch.float32) #Calculate variance based on updated samples                              
+                ##Fix to deal with zero variance or mean by linear extrapolation                                                                                       
+                V[2:]=torch.maximum(V[2:],.5*V[1:-1]*M**(-beta))
+                cf_=torch.sqrt((1+V/(N*Yl**2)))
+                print(f'correction factor: {cf_}')
+                Y_corrected=(imagenorm(sums[:,0])/N).to(torch.float32)/cf_ #correct for bias                       
+                Yl=Y_corrected
+                if torch.max(cf_-cf)<.01:
+                    break
+                cf=cf_
+            
             #Estimate order of weak convergence using LR
             #Yl=(M^alpha-1)khl^alpha=(M^alpha-1)k(TM^-l)^alpha=((M^alpha-1)kT^alpha)M^(-l*alpha)
             #=>log(Yl)=log(k(M^alpha-1)T^alpha)-alpha*l*log(M)
-            X=torch.ones((mylen-1,2),dtype=torch.float64)
+            X=torch.ones((mylen-1,2),dtype=torch.float32)
             X[:,0]=torch.arange(1,mylen)
             a = torch.lstsq(torch.log(Yl[1:]),X)[0]
             alpha_ = max(-a[0]/np.log(M),0.)
@@ -349,15 +358,16 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
                 alpha=alpha_
             if beta_0==-1:
                 beta=beta_
-            
+
             sqrt_V=torch.sqrt(V)
             sqrt_cost=torch.sqrt(cost) #cost per sample on average at each level
             Nl_new=torch.ceil(((accsplit*accuracy)**-2)*torch.sum(sqrt_V*sqrt_cost)*(sqrt_V/sqrt_cost)) #Estimate optimal number of samples/level
             dN=torch.clip(Nl_new-N,min=0) #Number of additional samples
-            print(f'Std={torch.sqrt(torch.sum(2*V/N))}. Bias={np.sqrt(2)*Yl[-1]/(M**alpha-1)}. Error={torch.sqrt((Yl[-1]/(M**alpha-1))**2+torch.sum(V/N))}.')
+            #print(f'Std={torch.sqrt(torch.sum(2*V/N))}. Bias={np.sqrt(2)*Yl[-1]/(M**alpha-1.)}. Error={torch.sqrt((Yl[-1]/(M**alpha-1))**2+torch.sum(V/N))}.')
             if torch.sum(dN > 0.01*N).item() == 0: #Almost converged
                 test=max(Yl[-2]/(M**alpha),Yl[-1]) if len(N)>2 else Yl[-1]
-                if test>(M**alpha-1)*accuracy*np.sqrt(1-accsplit**2):
+                print(f'Std={torch.sqrt(torch.sum(2*V/N))}. Bias={np.sqrt(2)*test/(M**alpha-1.)}. Error={torch.sqrt((test/(M**alpha-1))**2+torch.sum(V/N))}.')
+                if test>(M**alpha-1.)*accuracy*np.sqrt(1.-accsplit**2):
                     L+=1
                     print(f'Increased L to {L}.')
                     if (L>Lmax):
@@ -383,7 +393,7 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
         M=mlmcopts.M
         N0=mlmcopts.N0
         Lmax = mlmcopts.Lmax
-        Nsamples=1000
+        Nsamples=10000
         Lmin=mlmcopts.Lmin
 
         #Variance and mean samples
@@ -460,6 +470,15 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
                 Lmin=3
             
         #Do the calculations and simulations for num levels and complexity plot
+        
+        with open(os.path.join(this_sample_dir, "averages.pt"), "rb") as fout:
+            avgs=torch.load(fout)
+        with open(os.path.join(this_sample_dir, "sqaverages.pt"), "rb") as fout:
+            sqavgs=torch.load(fout)
+
+        means_p=imagenorm(avgs[Lmin:,1])
+        V_p=mom2norm(sqavgs[Lmin:,1])-means_p**2
+
         sums=torch.zeros((Lmax+1-Lmin,*sums.shape[1:]))
         sqsums=torch.zeros((Lmax+1-Lmin,*sqsums.shape[1:]))
         accsplitdir = os.path.join(eval_dir, f"Experiment")
@@ -470,13 +489,10 @@ def mlmc_test(config,eval_dir,checkpoint_dir,payoff_arg,acc=[],M=2,Lmax=11,
             print(f'Performing mlmc for accuracy={e}')
             print(f'abLmin={alpha,beta,Lmin}')
             sums,sqsums,N,cost=mlmc(e,M,alpha_0=alpha,beta_0=beta,N0=N0,Lmin=Lmin,Lmax=Lmax) #sums=[dX,Xf,Xc], sqsums=[||dX||^2,||Xf||^2,||Xc||^2]
-            means_p=imagenorm(sums[:,1])/N #Norm of mean of fine discretisations
-            V_p=mom2norm(sqsums[:,1])/N-means_p**2
-            means_dp=imagenorm(sums[:,1])/N
 
             #cost
             cost_mlmc=torch.sum(N*cost) #cost is number of NFE
-            cost_mc=(1/(e*accsplit))**2*V_p[-1]*cost[-1]/(1+1./M)
+            cost_mc=(1/(e*accsplit))**2*V_p[len(N)-1]*cost[-1]/(1+1./M)
 
             # Directory to save means, norms and N
             dividerN=N.clone() #add axes to N to broadcast correctly on division
