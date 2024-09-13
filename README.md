@@ -14,3 +14,8 @@ Multilevel Monte Carlo" Haji-Ali et. al. (2024) adapted from https://github.com/
 }
 ```
 Used under Apache-2.0 license.
+
+Run e.g.
+```
+python main.py --workdir exp/checkpoints/cifar10_ddpmpp_continuous --acc 0.0086 --config configs/vp/cifar10_ddpmpp_continuous.py --eval_folder exp/eval/cifar10DenoisingSecondmoment_0.8 --MLMCsampler EXPINT --probflow=False --conditional=True --payoff secondmoment --conditional_noise .8
+```
