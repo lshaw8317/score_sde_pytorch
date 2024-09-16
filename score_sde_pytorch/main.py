@@ -25,7 +25,7 @@ import logging
 import os
 import torch
 import tensorflow as tf
-import MLMC
+import MLMC as MLMC
 from easydict import EasyDict as edict
 
 FLAGS = flags.FLAGS
